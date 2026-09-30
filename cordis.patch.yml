@@ -1,0 +1,19 @@
+# This bundle patch is intentionally empty.
+#
+# The Unity MCP endpoint URL embeds a per-project token, so the plugin row belongs to YOUR
+# layer (the profile's own cordis.patch.yml), not to the shared bundle. Point that row at
+# this package by name:
+#
+#   - insert:
+#       - id: unity-mcp
+#         name: 'dsh-unity-mcp-bridge'
+#         config:
+#           serverName: unity
+#           transport: streamable-http
+#           url: http://localhost:24009/p/<your-token>
+#           resyncAfterTools:
+#             - tool-set-enabled-state
+#           resyncIntervalMs: 0
+#
+# See README.md for the full configuration table and the install procedure.
+[]
