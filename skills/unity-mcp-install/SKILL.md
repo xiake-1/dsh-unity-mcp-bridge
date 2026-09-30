@@ -93,7 +93,7 @@ Select-String -Path (Join-Path $proj 'Packages\manifest.json') -Pattern 'com\.iv
 
 1. 用 Unity 打开该项目（`unity-mcp-cli open $proj`）—— 包在编辑器里解析，`Library/PackageCache/` 才会出现。
 2. 在 Unity 里打开 **Window → AI Game Developer**，确认连接方式（自建本地端点选 Custom，或走 Cloud）。
-3. 回到 DSH 跑 `/unity-mcp-check`，验证 DSH ↔ Unity 是否真的连通。
+3. 回到 DSH 跑 `/unity-mcp-check`：它会把两端端口统一到 **20000**，把 Unity 工具集初始化成只留 `tool-set-enabled-state`，再实测连通性。
 
 ## 注意
 
