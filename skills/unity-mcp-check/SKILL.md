@@ -74,12 +74,18 @@ unity-mcp-cli bootstrap-local $proj --url 'http://localhost:20000/' --token '<�
 Unity 侧**只留一个**工具 `tool-set-enabled-state`：它是唯一的"开关"，关掉就再也开不回来；这也正是插件的 `unity_tools_restore` 保留集，等于最小常驻状态。
 
 ```powershell
-unity-mcp-cli configure $proj --list                                                  # 看当前状态
-unity-mcp-cli configure $proj --disable-all-tools --enable-tools tool-set-enabled-state
-unity-mcp-cli configure $proj --list | Select-String '\[enabled\]'                    # 复验
+unity-mcp-cli configure $proj --list | Select-String '\[enabled\]'   # 先看当前状态
+
+# 必须分成两条执行 —— 见下面的顺序陷阱
+unity-mcp-cli configure $proj --disable-all-tools
+unity-mcp-cli configure $proj --enable-tools tool-set-enabled-state
+
+unity-mcp-cli configure $proj --list | Select-String '\[enabled\]'   # 复验：恰好 1 条
 ```
 
-- 复验结果应当**只有** `tool-set-enabled-state` 是 `[enabled]`，其余全是 `[disabled]`。
+- ⚠️ **顺序陷阱（实测）**：`--disable-all-tools` 与 `--enable-tools` **不能写在同一条命令里** —— disable-all 会覆盖 enable，结果连唯一的开关 `tool-set-enabled-state` 都被关掉（0 个启用），那就再也没有工具能把它开回来。必须分两条：先 disable-all，再 enable-tools。
+- 万一已经被全部关掉：单独跑一条 `unity-mcp-cli configure $proj --enable-tools tool-set-enabled-state` 即可救回，不用重装插件。
+- 复验结果应当**只有** `tool-set-enabled-state` 是 `[enabled]`，其余全是 `[disabled]`（参考实测：1 enabled / 119 disabled）。
 - 这一步直接读写项目配置，**不需要 Unity 在运行**。
 - prompts / resources 默认全关，保持关闭即可；除非用户明确要求，不要打开。
 - 需要别的命令时，交给 `/unity-mcp-tools` 的按需流程（开启 → 用 → `unity_tools_restore` 收回），不要在这里预先全开：每个已启用命令的 schema 都会进入之后每一次模型请求。
@@ -121,5 +127,5 @@ DSH 侧只有一条真正的实测：**调用 `unity_mcp_activate`**。
 | manifest 里有包但连不上 | Unity 还没解析包 | 用 Unity 打开项目一次 |
 | 404 / 405 | 端点路径不对（`/mcp` ↔ `/p/<token>`） | 以 `http://localhost:20000/mcp` 为准；需要 token 路径时再补 |
 | 401 / 403 | token 缺失或过期 | 用项目配置里的 token；或 `bootstrap-local --url ... --token ...` 重新固定 |
-| 工具被人为全关 | 误关 `tool-set-enabled-state` | `unity-mcp-cli configure $proj --enable-tools tool-set-enabled-state` |
+| 工具全被关掉（含 `tool-set-enabled-state`） | 把 `--disable-all-tools` 与 `--enable-tools` 写进了同一条命令（上面那个顺序陷阱） | 单独跑一条 `unity-mcp-cli configure $proj --enable-tools tool-set-enabled-state` 救回 |
 | 工具名冲突 / 行为异常 | stock `dsh-mcp-client` 与桥接插件同时跑同一 `serverName` | 只留一个 |
