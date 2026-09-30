@@ -18,6 +18,7 @@
     "tools",
     "cordis.patch.yml",
     "README.md",
+    "README.zh.md",
     "FEATURES-AND-COMPARISON.md",
     "LICENSE"
   ],

@@ -3,6 +3,8 @@
 > Feature overview and a measured comparison of "tools vs handling it directly from files"
 > (token cost and latency, with the numbers behind them):
 > **[FEATURES-AND-COMPARISON.md](FEATURES-AND-COMPARISON.md)** (Chinese).
+>
+> 中文说明（简明版）→ **[README.zh.md](README.zh.md)**
 
 A self-contained **DeepSeek Harness (DSH) plugin** that connects **on demand** to a Unity MCP
 server (AI Game Developer / `com.ivanmurzak.unity.mcp`). It is **dormant until the user runs
