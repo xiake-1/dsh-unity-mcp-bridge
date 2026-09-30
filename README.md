@@ -80,6 +80,22 @@ dsh plugin --profile <profile> add git+https://github.com/xiake-1/dsh-unity-mcp-
 > `serverName` at the same time.** They are separate module instances, so each believes it
 > owns the namespace, and both would publish the same public tool names.
 
+## Companion skills: install and check
+
+Two more shipped runtime skills cover the other half of the setup — the Unity-side plugin, and
+the link between the two halves. Unlike the catalog they are **model-visible by default** (they
+are the on-ramp and the doctor, not the Unity capability itself), and both are also slash
+commands:
+
+| Skill | What it does |
+|---|---|
+| `/unity-mcp-install` | Checks whether `unity-mcp-cli` is on the machine — installs it with `npm install -g unity-mcp-cli` when it is missing — then finds the Unity project **inside the current workspace** (by `ProjectSettings/ProjectVersion.txt`). If `com.ivanmurzak.unity.mcp` is already in `Packages/manifest.json` it says so; otherwise it runs `unity-mcp-cli install-plugin <project>` and re-reads the manifest to verify. |
+| `/unity-mcp-check` | Finds the same project, reads its real endpoint (the CLI's own auto-detection, then `UserSettings/AI-Game-Developer-Config.json`, then the last `Start listening on port:` line in the MCP server log), probes the port and the HTTP endpoint, and finally loads the bridge with `unity_mcp_activate` to prove the link. **Default port 20000**; when the project listens somewhere else it rewrites the `unity-mcp` row's `url` in the profile's `cordis.patch.yml` — after a timestamped backup — and says whether a restart is needed, because only a `patchReload: live` profile picks the change up on save. |
+
+Both follow the documented setup flow at <https://ai-game.dev/engines/unity>. Set
+`registerHelperSkills: false` to ship without them; the configuration table below has the name
+and invocation knobs.
+
 ## Configuration
 
 Everything the stock client accepts (`serverName`, `transport`, `command`/`args`/`env`/`cwd`
@@ -99,6 +115,11 @@ for stdio, `url`/`headers` for streamable-http, `toolCallTimeoutMs`, `failOnStar
 | `keepEnabledTools` | `[]` | Extra raw tool names the restore hook leaves enabled (on top of `tool-set-enabled-state`). |
 | `registerCatalogSkill` | `true` | Register the shipped catalog as a runtime skill. |
 | `skillName` | `unity-mcp-tools` | Skill name / slash command (`/unity-mcp-tools`). |
+| `registerHelperSkills` | `true` | Register the two shipped helper skills (`/unity-mcp-install`, `/unity-mcp-check`). |
+| `installSkillName` | `unity-mcp-install` | Name of the skill that installs the Unity-side plugin into the workspace's Unity project. |
+| `checkSkillName` | `unity-mcp-check` | Name of the skill that verifies the bridge reaches Unity and repairs the profile URL. |
+| `helperSkillsModelInvocable` | `true` | The helpers, unlike the catalog, are offered to the model so it can reach for them unprompted. |
+| `helperSkillsUserInvocable` | `true` | They are also user-invocable slash commands. |
 
 ## Activation model (opt-in)
 

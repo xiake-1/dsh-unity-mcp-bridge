@@ -1,8 +1,8 @@
 {
   "name": "dsh-unity-mcp-bridge",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "private": true,
-  "description": "Opt-in Unity-MCP bridge for DeepSeek Harness: dormant by default (the /unity-mcp-tools skill activates it), self-driven tool-list re-sync, a restore-and-disconnect hook, and a shipped tool-catalog skill.",
+  "description": "Opt-in Unity-MCP bridge for DeepSeek Harness: dormant by default (the /unity-mcp-tools skill activates it), self-driven tool-list re-sync, a restore-and-disconnect hook, a shipped tool-catalog skill, and /unity-mcp-install + /unity-mcp-check companion skills.",
   "type": "module",
   "main": "lib/index.js",
   "exports": {
