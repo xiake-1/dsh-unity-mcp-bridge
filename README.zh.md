@@ -10,7 +10,7 @@
 - **按需开启**：`/unity-mcp-tools` 激活后，只开启本次任务要用的命令。每个已开启命令的完整 JSON Schema 都会进入**之后每一次**模型请求，所以用完必须收回。
 - **自动重同步**：调用 `tool-set-enabled-state` 之后，桥接自己重新拉 `tools/list` 并替换注册表，不依赖服务端的 `list_changed` 通知（DSH 长会话收不到）。
 - **一键收回**：`unity_tools_restore` 关闭除管理工具外的全部工具**并断开连接**，回到休眠。
-- **自带命令目录**：73 个 Unity 命令按分类随包发布，模型按需只读一个分类文件。
+- **自带命令目录**：按分类随包发布，模型按需只读一个分类文件。命令名随插件版本变——1.2.0 是 18 个（旧版 73 个细粒度命令已被 `rql-query` / `rql-mutate` / `rql-schema` 取代），换版本后用 `tools/generate-unity-mcp-catalog.ps1` 重新生成。
 
 ## 安装
 

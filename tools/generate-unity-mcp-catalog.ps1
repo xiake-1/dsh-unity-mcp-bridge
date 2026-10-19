@@ -18,7 +18,10 @@
 param(
     [string]$PackageRoot,
     [string]$ProjectRoot,
-    [string]$OutDir
+    [string]$OutDir,
+    # 只有这些命令（支持通配符）把插件自带的完整正文写进 L2。默认只给 RQL：它的正文就是
+    # 语言手册，缺了模型写不出查询；其余命令的正文多是重复说明，会把按需加载的分类文件撑大。
+    [string[]]$BodyTools = @('rql-*')
 )
 
 $ErrorActionPreference = 'Stop'
@@ -48,14 +51,129 @@ $pkgName = Split-Path $PackageRoot -Leaf
 $files = Get-ChildItem $apiRoot -Recurse -File -Filter '*.cs'
 $toolFiles = Get-ChildItem $toolRoot -Recurse -File -Filter '*.cs'
 
-# ---------- 常量表：常量名 -> 真实命令名 ----------
-$constMap = @{}
-foreach ($f in $files) {
-    $text = Get-Content $f.FullName -Raw
-    foreach ($m in [regex]::Matches($text, '(?m)^\s*(?:public|internal|private)?\s*(?:const|static\s+readonly)\s+string\s+(?<id>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*"(?<v>[^"]*)"')) {
-        $constMap[$m.Groups['id'].Value] = $m.Groups['v'].Value
+# ---------- C# 字符串字面量 / 常量表达式求值 ----------
+# 1.2.0 起，工具的用途与正文不再写字面量，而是写常量引用：
+#   [Description(RqlGuide.QueryDescription)]  /  [AiSkillBody(RqlGuide.MutateDescription)]
+# 而 RqlGuide 里的常量本身又是「字面量 + 其它常量」的拼接。所以这里实现一个极小的
+# C# 常量求值器：扫全包 const string 声明 → 按 + 切分 → 解码字面量（含 @"verbatim"）
+# → 递归解析标识符引用（带深度保护）。
+function Get-StringLiteralAt {
+    param([string]$s, [int]$i)
+    $verbatim = ($s[$i] -eq '@')
+    if ($verbatim) { $i++ }
+    if ($i -ge $s.Length -or $s[$i] -ne '"') { return $null }
+    $i++
+    $sb = New-Object System.Text.StringBuilder
+    while ($i -lt $s.Length) {
+        $ch = $s[$i]
+        if ($verbatim) {
+            if ($ch -eq '"') {
+                if (($i + 1) -lt $s.Length -and $s[$i + 1] -eq '"') { [void]$sb.Append('"'); $i += 2; continue }
+                $i++; break
+            }
+            [void]$sb.Append($ch); $i++; continue
+        }
+        if ($ch -eq '\') {
+            $n = $s[$i + 1]
+            if ($n -eq 'n') { [void]$sb.Append("`n") }
+            elseif ($n -eq 't') { [void]$sb.Append("`t") }
+            elseif ($n -eq 'r') { [void]$sb.Append("`r") }
+            elseif ($n -eq '0') { }
+            else { [void]$sb.Append($n) }
+            $i += 2; continue
+        }
+        if ($ch -eq '"') { $i++; break }
+        [void]$sb.Append($ch); $i++
+    }
+    return @{ Value = $sb.ToString(); Next = $i }
+}
+
+# 把表达式按「顶层 +」切成 token（字符串内部的 + 不算分隔符）
+function Get-ExprTokens([string]$e) {
+    $toks = New-Object System.Collections.Generic.List[string]
+    $cur = New-Object System.Text.StringBuilder
+    $i = 0
+    while ($i -lt $e.Length) {
+        $ch = $e[$i]
+        if ($ch -eq '"' -or ($ch -eq '@' -and ($i + 1) -lt $e.Length -and $e[$i + 1] -eq '"')) {
+            $lit = Get-StringLiteralAt $e $i
+            if (-not $lit) { break }
+            [void]$cur.Append($e.Substring($i, $lit.Next - $i))
+            $i = $lit.Next
+            continue
+        }
+        if ($ch -eq '+') { $toks.Add($cur.ToString().Trim()); [void]$cur.Clear(); $i++; continue }
+        [void]$cur.Append($ch); $i++
+    }
+    $toks.Add($cur.ToString().Trim())
+    return ($toks | Where-Object { $_ -ne '' })
+}
+
+$script:constRaw = @{}
+$script:constMap = @{}
+
+function Resolve-Const {
+    param([string]$name, [int]$depth = 0)
+    if ($script:constMap.ContainsKey($name)) { return $script:constMap[$name] }
+    if ($depth -gt 12 -or -not $script:constRaw.ContainsKey($name)) { return $null }
+    $text = (Get-AttrText $script:constRaw[$name] ($depth + 1))
+    $script:constMap[$name] = $text
+    return $text
+}
+
+# 属性参数文本 -> 真实字符串：常量引用走 Resolve-Const，字面量拼接走解码，nameof(X) 取末段
+function Get-AttrText {
+    param([string]$argText, [int]$depth = 0)
+    $t = ($argText -replace '\s+', ' ').Trim()
+    if ($t -match '^[A-Za-z_][A-Za-z0-9_.]*$') {
+        $leaf = ($t -split '\.')[-1]
+        $v = Resolve-Const $leaf ($depth + 1)
+        if ($v) { return $v }
+    }
+    $sb = New-Object System.Text.StringBuilder
+    foreach ($tok in (Get-ExprTokens $argText)) {
+        if ($tok -match '^@?"') {
+            $lit = Get-StringLiteralAt $tok 0
+            if ($lit) { [void]$sb.Append($lit.Value) }
+            continue
+        }
+        $nm = [regex]::Match($tok, '^nameof\s*\(\s*([A-Za-z_][A-Za-z0-9_.]*)\s*\)$')
+        if ($nm.Success) { [void]$sb.Append(($nm.Groups[1].Value -split '\.')[-1]); continue }
+        # 拼接里的裸标识符 = 引用另一个常量（RqlGuide 的 Language / MutateStages 就是这样）
+        $idm = [regex]::Match($tok, '^([A-Za-z_][A-Za-z0-9_.]*)$')
+        if ($idm.Success) {
+            $leaf = ($idm.Groups[1].Value -split '\.')[-1]
+            $v = Resolve-Const $leaf ($depth + 1)
+            if ($v) { [void]$sb.Append($v) }
+            continue
+        }
+    }
+    return $sb.ToString()
+}
+
+# ---------- 常量表：常量名 -> 求值后的字符串（命令名 + 用途/正文都靠它） ----------
+$pkgFiles = Get-ChildItem $PackageRoot -Recurse -File -Filter '*.cs'
+foreach ($f in $pkgFiles) {
+    $text = Get-Content $f.FullName -Raw -Encoding UTF8
+    foreach ($m in [regex]::Matches($text, '(?m)(?:public|internal|private)?\s*(?:const|static\s+readonly)\s+string\s+(?<id>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*')) {
+        $start = $m.Index + $m.Length
+        $i = $start; $end = -1
+        while ($i -lt $text.Length) {
+            $ch = $text[$i]
+            if ($ch -eq '"' -or ($ch -eq '@' -and ($i + 1) -lt $text.Length -and $text[$i + 1] -eq '"')) {
+                $lit = Get-StringLiteralAt $text $i
+                if ($lit) { $i = $lit.Next; continue }
+            }
+            if ($ch -eq ';') { $end = $i; break }
+            $i++
+        }
+        if ($end -lt 0) { continue }
+        $script:constRaw[$m.Groups['id'].Value] = $text.Substring($start, $end - $start)
     }
 }
+$constMap = @{}
+foreach ($k in @($script:constRaw.Keys)) { Resolve-Const $k 0 | Out-Null }
+foreach ($k in @($script:constMap.Keys)) { if ($script:constMap[$k]) { $constMap[$k] = $script:constMap[$k] } }
 
 function Get-StringLiterals([string]$s) {
     ($([regex]::Matches($s, '"((?:[^"\\]|\\.)*)"') | ForEach-Object { $_.Groups[1].Value }) -join ' ')
@@ -117,7 +235,7 @@ function Get-ParamList([string]$tail) {
 # ---------- 抽取 ----------
 $rows = New-Object System.Collections.Generic.List[object]
 foreach ($f in $toolFiles) {
-    $text = Get-Content $f.FullName -Raw
+    $text = Get-Content $f.FullName -Raw -Encoding UTF8
     foreach ($m in [regex]::Matches($text, '\[AiTool\s*\(\s*(?<id>[A-Za-z_][A-Za-z0-9_]*)\s*,(?<body>.*?)\)\s*\]', 'Singleline')) {
         $id = $m.Groups['id'].Value
         $body = $m.Groups['body'].Value
@@ -131,10 +249,15 @@ foreach ($f in $toolFiles) {
         $tail = $text.Substring($m.Index + $m.Length)
         $dm = [regex]::Match($tail, '\[Description\((?<b>.*?)\)\]', 'Singleline')
         if (-not $dm.Success) { $dm = [regex]::Match($tail, '\[AiSkillDescription\((?<b>.*?)\)\]', 'Singleline') }
-        $purpose = if ($dm.Success) { (Get-StringLiterals $dm.Groups['b'].Value) } else { '' }
+        $purpose = if ($dm.Success) { (Get-AttrText $dm.Groups['b'].Value) } else { '' }
         $purpose = ($purpose -replace '\s+', ' ').Trim()
         $oneLine = ($purpose -split '(?<=\.)\s')[0]
         if ($oneLine.Length -gt 140) { $oneLine = $oneLine.Substring(0, 137) + '...' }
+
+        # 插件喂给模型的完整正文（[AiSkillBody]）。RQL 的语言手册就在这里 —— 目录里必须带上，
+        # 否则「按需付费」的第二层只剩命令名，模型写不出查询。
+        $bm = [regex]::Match($tail, '\[AiSkillBody\((?<b>[^\)]*(?:\([^\)]*\)[^\)]*)*)\)\]', 'Singleline')
+        $body = if ($bm.Success) { (Get-AttrText $bm.Groups['b'].Value).Trim() } else { '' }
 
         $parts = $title -split '\s*/\s*'
         $category = if ($parts.Count -gt 1) { ($parts[0..($parts.Count - 2)] -join ' / ') } else { 'Other' }
@@ -145,6 +268,7 @@ foreach ($f in $toolFiles) {
             Default  = if ($enabled -eq 'true') { 'on' } else { 'off' }
             Purpose  = $oneLine
             Params   = (Get-ParamList $tail)
+            Body     = $body
             Source   = $f.FullName.Substring($PackageRoot.Length).TrimStart('\', '/')
         })
     }
@@ -184,13 +308,22 @@ $s1 = New-Object System.Text.StringBuilder
 [void]$s1.AppendLine('')
 [void]$s1.AppendLine('0. **激活** —— 先调用 `unity_mcp_activate`，建立连接并注册 Unity 工具（本技能被调用后的第一步）。')
 [void]$s1.AppendLine('1. **定位** —— 在本索引找到需要的能力，读对应的 `reference/<分类>.md`，拿到命令名与参数名。')
+[void]$s1.AppendLine('   - 索引之外的命令名（例如装了扩展包后新增的）先调 `mcp__unity__unity-tool-list` 核对，不要凭记忆猜。')
 [void]$s1.AppendLine('2. **开启** —— 调用 `mcp__unity__tool-set-enabled-state`，把需要的命令设为 `enabled: true`（可一次传多个）。')
 [void]$s1.AppendLine('   - 开启后**下一个步骤**才生效：工具注册表在请求边界重建，**不能在同一个步骤里开启并调用**。')
 [void]$s1.AppendLine('3. **使用** —— 下一步直接调用 `mcp__unity__<命令名>`。')
+[void]$s1.AppendLine('   - 读写 Unity 内容优先走 RQL：`rql-schema` 认类型 → `rql-query` 读 → `rql-mutate` 写（`dry_run: true` 先预览；改动在编辑器里 Ctrl+Z 可撤销，全有或全无）。')
 [void]$s1.AppendLine('4. **恢复（必做，任务结束时）** —— 调用 `unity_tools_restore`：关闭除 `tool-set-enabled-state` 以外的全部已开启命令，并断开连接、注销全部 `mcp__unity__*` 工具，回到休眠状态。')
-[void]$s1.AppendLine('   - 想保留个别命令：`unity_tools_restore({ "keep": ["gameobject-find"] })`（仍会断开休眠）。')
+[void]$s1.AppendLine('   - 想保留个别命令：`unity_tools_restore({ "keep": ["rql-query"] })`（仍会断开休眠）。')
 [void]$s1.AppendLine('')
 [void]$s1.AppendLine('为什么必须恢复：**每个处于开启状态的命令，其完整 JSON Schema 都会进入之后每一次模型请求**（未开启的不会）。开启是临时的、可回收的成本；忘记关闭就等于把这个成本永久留在上下文里。')
+[void]$s1.AppendLine('')
+[void]$s1.AppendLine('## 版本适配（读索引前先确认）')
+[void]$s1.AppendLine('')
+[void]$s1.AppendLine('- 本索引由插件源码生成，**命令名随包版本变**；标题行的包版本就是本索引的依据。换版本后重新生成，不要沿用旧索引。')
+[void]$s1.AppendLine('- **1.2.0 起**：`gameobject-*`、`assets-*`、`scene-*`、`profiler-*`、`console-*`、`editor-application-*`、`editor-selection-*`、`object-*`、`reflection-method-*`、`type-get-json-schema` 已从插件中移除，改由 `rql-query` / `rql-mutate` / `rql-schema` 承担（见 `reference/rql.md`）。按旧名字调用必然失败。')
+[void]$s1.AppendLine('- 扩展包（Animation / Cinemachine / InputSystem / Navigation / ParticleSystem / ProBuilder / Splines / Terrain / Tilemap / Timeline）会新增命令，本索引不含它们 —— 用 `unity-tool-list` 取实时清单。')
+[void]$s1.AppendLine('- 插件的 `toolFormat`（`Rql` | `Json`，1.2.0 默认 `Rql`）决定工具参数与结果的数据表示；写参数前看 `reference/<分类>.md` 的参数说明。')
 [void]$s1.AppendLine('')
 foreach ($g in ($rows | Group-Object Category | Sort-Object Name)) {
     $names = ($g.Group | ForEach-Object { $_.Tool }) -join ', '
@@ -214,6 +347,26 @@ foreach ($g in ($rows | Group-Object Category | Sort-Object Name)) {
         [void]$s2.AppendLine("  - 源码: ``$(($r.Source -replace '\\','/'))``")
     }
     [void]$s2.AppendLine('')
+
+    # 长正文（语言手册 / 详细用法）按段落到此分类文件里，逐段去重：
+    # 正文最长的命令先落，共享段落只出现一次（RQL 的语言段因此归 rql-query，
+    # 与插件自己的注释一致：「完整语言指南在 rql-query 的描述里」）。
+    $seen = New-Object System.Collections.Generic.HashSet[string]
+    foreach ($r in ($g.Group | Where-Object { $r.Body -and $r.Body.Length -ge 300 -and ($BodyTools | Where-Object { $r.Tool -like $_ }) } | Sort-Object { $_.Body.Length } -Descending)) {
+        $keep = New-Object System.Collections.Generic.List[string]
+        foreach ($p in ($r.Body -split "`r?`n`r?`n")) {
+            $k = $p.Trim()
+            if (-not $k) { continue }
+            if ($seen.Add($k)) { $keep.Add($k) }
+        }
+        if ($keep.Count -eq 0) { continue }
+        [void]$s2.AppendLine("### ``$($r.Tool)`` 的完整用法（插件喂给模型的原文，已按段落去重）")
+        [void]$s2.AppendLine('')
+        [void]$s2.AppendLine('```text')
+        [void]$s2.AppendLine(($keep -join "`n`n"))
+        [void]$s2.AppendLine('```')
+        [void]$s2.AppendLine('')
+    }
     Set-Content -Path (Join-Path $refDir "$(Get-Slug $g.Name).md") -Value $s2.ToString() -Encoding UTF8
 }
 

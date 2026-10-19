@@ -151,15 +151,19 @@ The skill body states it, and the hook tools enforce the ends of it:
 2. **Enable** — `mcp__unity__tool-set-enabled-state` with the needed commands set to
    `enabled: true`. Takes effect on the **next** step (the registry is rebuilt at request
    boundaries), never in the same step.
-3. **Use** — call `mcp__unity__<command>` on the next step.
+3. **Use** — call `mcp__unity__<command>` on the next step. Since plugin 1.2.0, reading and
+   changing scene content goes through RQL: `rql-schema` to learn a type, `rql-query` to read,
+   `rql-mutate` to write (`dry_run: true` previews; every mutate is all-or-nothing and undoable
+   with Ctrl+Z).
 4. **Restore** — call `unity_tools_restore` when the Unity work is done. It disables
    everything except the management tool. Keep specific tools with
-   `unity_tools_restore({ "keep": ["gameobject-find"] })`.
+   `unity_tools_restore({ "keep": ["rql-query"] })`.
 
 Every enabled command contributes its full JSON schema to **every subsequent model request**;
 disabled ones contribute nothing. Enabling is a temporary, reclaimable cost — forgetting step 4
-is what turns it permanent. The restore helper exists so step 4 never requires enumerating 73
-names.
+is what turns it permanent. The restore helper exists so step 4 never requires enumerating
+every registered name (the count itself is version-dependent: 73 commands on plugin 0.9x,
+18 on 1.2.0 — see the catalog's own header line).
 
 ## Regenerating the catalog
 
@@ -167,6 +171,14 @@ names.
 `com.ivanmurzak.unity.mcp@*` package and rewrites `skills/SKILL.md` plus
 `skills/reference/*.md` (categories come from the plugin's own `[AiTool(Title = ...)]`
 attributes). Re-run it after a Unity plugin upgrade, then restart `dsh web`.
+
+Plugin 1.2.0 no longer writes tool descriptions as string literals — they are constant
+references such as `[Description(RqlGuide.QueryDescription)]`, and `RqlGuide` concatenates
+literals with other constants. The generator evaluates those constants, which is also how the
+RQL language manual lands in `reference/rql.md`: `-BodyTools` (default `rql-*`) picks which
+commands carry the plugin's own `[AiSkillBody]` text, so mechanical categories stay one-liners
+while the language tool carries its full guide. Keep the script saved as **UTF-8 with a BOM** —
+Windows PowerShell 5.1 reads BOM-less UTF-8 as ANSI and turns the Chinese text into parse errors.
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File tools/generate-unity-mcp-catalog.ps1 -ProjectRoot <your-unity-project>
