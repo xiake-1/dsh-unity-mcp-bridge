@@ -44,8 +44,8 @@ dsh plugin --profile <profile> add file:<path-to-this-checkout>
 | 技能 | 用途 |
 |---|---|
 | `/unity-mcp-tools` | 打开 Unity 能力：激活 → 查命令目录 → 按需开启 → 用完恢复休眠 |
-| `/unity-mcp-install` | 在工作区内定位 Unity 项目并安装 Unity-MCP 插件（缺 `unity-mcp-cli` 就先装它） |
-| `/unity-mcp-check` | 把两端端口统一到 **20000**、把工具集初始化成只留 `tool-set-enabled-state`，再实测连通性 |
+| `/unity-mcp-install` | 在工作区内定位 Unity 项目，安装 Unity-MCP 插件**与 MCP Server**（`--with-server`）；缺 `unity-mcp-cli` 就先装、并核对 CLI/插件/Server 版本 lockstep；GitHub 下载失败时用本机代理（Clash，需 `NODE_USE_ENV_PROXY=1`）重试，或离线 zip 过 `SHA256SUMS` 校验后 `--server-source` |
+| `/unity-mcp-check` | 把两端端口统一到 **20000**、把 AI agent 配成 **Kilo Code**（写 `.kilocode/mcp.json`，走 `configure --agent` 而不是 `setup-mcp`）、把工具集初始化成只留 `tool-set-enabled-state`，再实测连通性 |
 
 ## 用法（按需工作流）
 
