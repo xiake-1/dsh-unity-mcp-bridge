@@ -187,6 +187,7 @@ Push-Location $proj; & "$env:USERPROFILE\.ai-game-dev\server\win-x64\gamedev-mcp
 ## 注意
 
 - 不要手改 `Library/`；不要在工作区外装插件。
-- 本技能只负责 **Unity 侧**。DSH 侧的依赖与 `cordis.patch.yml` 配置属于 `dsh-unity-mcp-bridge` 自身；端口/端点不匹配由 `/unity-mcp-check` 修正。
+- 本技能只负责 **Unity 侧**。DSH 侧的依赖与插件行由 `dsh-unity-mcp-bridge` 自带的 bundle patch 提供（0.5.0 起），不需要往 profile 层写；端口/端点不匹配由 `/unity-mcp-check` 修正。
+- ⚠️ 别把插件行手写进**桌面端** profile 的 `cordis.patch.yml`：桌面端把该文件当成自己设置的导出文件重写，手写行会在下次重启后消失，表现为插件页「已安装，未生效」。要连别的端点就写覆盖行（`- id: unity-mcp` + `config.url`），或者把插件升到 ≥0.5.0。
 - 需要额外子系统的命令时才装扩展：`unity-mcp-cli install-extension <id|名称> $proj`（幂等；10 个：Animation 6 / Cinemachine 5 / InputSystem 7 / Navigation 11 / ParticleSystem 2 / ProBuilder 5 / Splines 6 / Terrain 5 / Tilemap 5 / Timeline 5 个命令）。包内 `extensions.compatibility.json` 有门槛：`minimumUnityVersion: 6000.6`，且 Navigation 需 `com.unity.ai.navigation@2.0.10`、ProBuilder 需 `com.unity.probuilder@6.1.3`、Tilemap 需 `com.unity.2d.tilemap.extras@7.0.1` —— 2022.x 工程装不上这三个。装了扩展同样要重生成命令目录（或用 `unity-tool-list` 看实时清单）。
 - 与 `install-plugin` 无关的 `install-unity`（装编辑器）、`create-project`（建项目）只在与用户确认后才用。

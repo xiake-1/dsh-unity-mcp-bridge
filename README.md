@@ -58,25 +58,26 @@ dsh plugin --profile <profile> add file:<path-to-this-checkout>
 #    or straight from git:
 dsh plugin --profile <profile> add git+https://github.com/xiake-1/dsh-unity-mcp-bridge.git
 
-# 2) point your profile patch entry at this package instead of the stock client
-#    %DSH_HOME%/profiles/<profile>/cordis.patch.yml
+# 2) nothing to write: the bundle patch inserts the plugin row itself
+#    (id `unity-mcp`, `url: http://localhost:20000/mcp`). A bundle that inserts
+#    no row installs as "installed but not in effect", and a desktop profile
+#    regenerates its own cordis.patch.yml from its settings store, so a row you
+#    add there by hand disappears on the next restart.
 ```
 
+Override the row only when this profile's endpoint differs — a plain `id` entry,
+not a second `insert`, in `%DSH_HOME%/profiles/<profile>/cordis.patch.yml`:
+
 ```yaml
-- insert:
-    - id: unity-mcp
-      name: 'dsh-unity-mcp-bridge'
-      config:
-        serverName: unity
-        transport: streamable-http
-        url: http://localhost:24009/p/<your-token>
-        resyncAfterTools:
-          - tool-set-enabled-state
-        resyncIntervalMs: 0
+- id: unity-mcp
+  config:
+    url: http://localhost:20000/p/<your-token>
 ```
 
 3. Restart the app (`dsh web`, or the desktop app). The skill and the helper tool appear
-   automatically.
+   automatically. If the Plugins page still says the package is installed but not in
+   effect, the profile's bundle list (`dsh.profile.bundles` in its `package.json`) is
+   missing `dsh-unity-mcp-bridge` — that, not the patch, is what makes the bundle load.
 
 > **Do not run this bridge and the stock `@deepseek-ai/dsh-mcp-client` against the same
 > `serverName` at the same time.** They are separate module instances, so each believes it

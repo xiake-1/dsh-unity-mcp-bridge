@@ -24,20 +24,16 @@ dsh plugin --profile <profile> add git+https://github.com/xiake-1/dsh-unity-mcp-
 dsh plugin --profile <profile> add file:<path-to-this-checkout>
 ```
 
-然后把下面这段加进 `%DSH_HOME%\profiles\<profile>\cordis.patch.yml`，再重启对应应用：
+插件包自带的 bundle patch 会插入 `unity-mcp` 这一行（`url: http://localhost:20000/mcp`），**不需要**再往 profile 的 `cordis.patch.yml` 里写任何东西。只有当这个 profile 要连别的端点时才覆盖它——用普通的 `id` 条目，不要再 `insert` 一遍：
 
 ```yaml
-- insert:
-    - id: unity-mcp
-      name: 'dsh-unity-mcp-bridge'
-      config:
-        serverName: unity
-        transport: streamable-http
-        url: http://localhost:20000/mcp
-        resyncAfterTools:
-          - tool-set-enabled-state
-        resyncIntervalMs: 0
+# %DSH_HOME%\profiles\<profile>\cordis.patch.yml（仅在端点不同时需要）
+- id: unity-mcp
+  config:
+    url: http://localhost:20000/p/<your-token>
 ```
+
+> 为什么不再要求手写：bundle patch 不插入任何行时，插件会显示「已安装，未生效」；而桌面端会把 profile 的 `cordis.patch.yml` 当成自己设置的导出文件重写，手写行会在下次重启后消失。若插件页仍显示未生效，检查该 profile `package.json` 里的 `dsh.profile.bundles` 是否包含 `dsh-unity-mcp-bridge`——决定 bundle 是否加载的是它，不是 patch。
 
 ## 三个技能
 
@@ -74,7 +70,7 @@ dsh plugin --profile <profile> add file:<path-to-this-checkout>
 dsh plugin --profile <profile> remove dsh-unity-mcp-bridge
 ```
 
-再从 `cordis.patch.yml` 删掉上面的 `unity-mcp` 行即可，不会改动包以外的文件。
+`unity-mcp` 行随 bundle 一起消失，不需要再改别的文件。只有当你曾在本 profile 的 `cordis.patch.yml` 里加过覆盖行时，才把它删掉。
 
 ## 许可与出处
 

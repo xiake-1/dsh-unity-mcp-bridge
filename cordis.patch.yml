@@ -1,19 +1,33 @@
-# This bundle patch is intentionally empty.
+# The plugin row ships with the bundle, because installing the package has to be
+# enough to make it active. A bundle whose patch inserts no row installs as
+# "installed but not in effect": nothing instantiates it, and a desktop profile
+# that regenerates its own cordis.patch.yml from its settings store drops any row
+# you added there by hand, so the plugin silently stops working after a restart.
 #
-# The Unity MCP endpoint URL embeds a per-project token, so the plugin row belongs to YOUR
-# layer (the profile's own cordis.patch.yml), not to the shared bundle. Point that row at
-# this package by name:
+# The default endpoint is the standard Unity-side one: gamedev-mcp-server.exe
+# listening on port 20000, mounted at /mcp. The token-carrying /p/<pin> path is
+# an alternative mount on that same listener, not a different port.
 #
-#   - insert:
-#       - id: unity-mcp
-#         name: 'dsh-unity-mcp-bridge'
-#         config:
-#           serverName: unity
-#           transport: streamable-http
-#           url: http://localhost:24009/p/<your-token>
-#           resyncAfterTools:
-#             - tool-set-enabled-state
-#           resyncIntervalMs: 0
+# To point this profile's row somewhere else, override it in YOUR layer (the
+# profile's cordis.patch.yml) with a plain id entry - not a second insert:
+#
+#   - id: unity-mcp
+#     config:
+#       url: http://localhost:20000/p/<your-token>
 #
 # See README.md for the full configuration table and the install procedure.
-[]
+- insert:
+    - id: unity-mcp
+      name: 'dsh-unity-mcp-bridge'
+      config:
+        serverName: unity
+        transport: streamable-http
+        url: http://localhost:20000/mcp
+        toolCallTimeoutMs: 120000
+        # After a call to any listed tool returns, this bridge re-fetches
+        # tools/list itself and swaps the registry, instead of waiting for the
+        # server's tools/list_changed notification.
+        resyncAfterTools:
+          - tool-set-enabled-state
+        # Safety-net periodic re-sync in ms (0 = off).
+        resyncIntervalMs: 0

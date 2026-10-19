@@ -10,21 +10,28 @@ whenToUse: 用户要求「检查 / 排查 Unity-MCP 连接」，或 unity_mcp_ac
 
 | 端 | 东西 | 位置 |
 |---|---|---|
-| DSH | 桥接插件 `dsh-unity-mcp-bridge` | `%DSH_HOME%\profiles\%DSH_PROFILE%\`：`package.json` 的依赖 + `cordis.patch.yml` 里的 `unity-mcp` 行（`url` 必须是 `http://localhost:20000/mcp`） |
+| DSH | 桥接插件 `dsh-unity-mcp-bridge` | `%DSH_HOME%\profiles\%DSH_PROFILE%\`：`package.json` 的依赖 **和 `dsh.profile.bundles` 里的包名**（决定 bundle 是否加载）；`unity-mcp` 行由插件自带的 `node_modules\dsh-unity-mcp-bridge\cordis.patch.yml` 插入（`url` 默认 `http://localhost:20000/mcp`），profile 自己的 `cordis.patch.yml` 只在需要覆盖端点时出现 |
 | Unity | 包 `com.ivanmurzak.unity.mcp` 起的 MCP 服务器 | 项目 `UserSettings\AI-Game-Developer-Config.json` 的 `host`（必须是 `http://localhost:20000`） |
 | AI agent | 客户端侧的 MCP 配置（本技能默认 **Kilo Code**） | 项目 `.kilocode\mcp.json` 的 `mcpServers.*.url`（端口必须是 20000）+ 同文件所在项目的 `skillsPath`（`.kilocode\skills`） |
 
-> **20000 是唯一标准端口。** 哪一端不是 20000，就把**那一端**改成 20000：Unity 侧用 `unity-mcp-cli bootstrap-local`，DSH 侧改 `cordis.patch.yml`，AI agent 侧重新跑 `configure --agent`（见第 5 步，它会跟着 `--url` 的端口走）。
+> **20000 是唯一标准端口。** 哪一端不是 20000，就把**那一端**改成 20000：Unity 侧用 `unity-mcp-cli bootstrap-local`，DSH 侧的默认 `url` 由插件 bundle patch 提供、本来就是 20000（出现别的端口说明 profile 里有覆盖行，改或删那一行），AI agent 侧重新跑 `configure --agent`（见第 5 步，它会跟着 `--url` 的端口走）。
 
 ## 1. DSH 侧现状
 
 ```powershell
 $prof = $env:DSH_PROFILE_DIR          # 例如 C:\Users\<you>\.dsh\profiles\desktop
+# 依赖 + bundle 列表：两者都在，bundle 才会被加载
 Get-Content (Join-Path $prof 'package.json') -Raw | Select-String 'dsh-unity-mcp-bridge'
+# 生效的 unity-mcp 行：默认由插件自带的 bundle patch 插入
+Select-String -Path (Join-Path $prof 'node_modules\dsh-unity-mcp-bridge\cordis.patch.yml') `
+  -Pattern 'id: unity-mcp' -Context 0,12
+# profile 层若有覆盖行，以它为准
 Select-String -Path (Join-Path $prof 'cordis.patch.yml') -Pattern 'unity-mcp' -Context 0,12
 ```
 
-确认三件事：依赖在不在、`url:` 是不是 `http://localhost:20000/mcp`、`serverName`（默认 `unity`）。同时确认**没有**第二份指向同一 `serverName` 的 stock `@deepseek-ai/dsh-mcp-client` 配置。
+确认四件事：依赖在不在、`dsh.profile.bundles` 里有没有 `dsh-unity-mcp-bridge`、生效的 `url:` 是不是 `http://localhost:20000/mcp`、`serverName`（默认 `unity`）。同时确认**没有**第二份指向同一 `serverName` 的 stock `@deepseek-ai/dsh-mcp-client` 配置。
+
+> 依赖和 bundles 都在、插件页却显示「已安装，未生效」→ 看 bundle patch 是不是空的。0.4.0 及以前它故意是 `[]`，要求使用者把行手写进 profile 层；桌面端会把 profile 层的 `cordis.patch.yml` 当成自己设置的导出文件重写，手写行下次重启就没了。0.5.0 起这一行随 bundle 提供，不再依赖 profile 层。
 
 ## 2. 定位 Unity 项目
 
@@ -42,7 +49,8 @@ Get-Content (Join-Path $proj 'UserSettings\AI-Game-Developer-Config.json') -Raw 
 Select-String -Path (Join-Path $proj 'Library\mcp-server\win-x64\logs\server-log.txt') `
   -Pattern 'Start listening on port' | Select-Object -Last 1
 
-# DSH 侧
+# DSH 侧：生效的 url（bundle 默认，profile 层的覆盖行优先）
+Select-String -Path (Join-Path $prof 'node_modules\dsh-unity-mcp-bridge\cordis.patch.yml') -Pattern 'url:'
 Select-String -Path (Join-Path $prof 'cordis.patch.yml') -Pattern 'url:'
 ```
 
@@ -68,7 +76,9 @@ unity-mcp-cli bootstrap-local $proj --url 'http://localhost:20000/' --token '<�
 - ⚠️ 顺手检查还有谁 pin 了旧端口（项目里的 `.kilocode\mcp.json`、其它 MCP 客户端配置），一并改成 20000，否则那些客户端会连不上。Kilo Code 那份**不要手改**，走第 5 步的 `configure --agent` 重配（它会连 pin 一起重写）。**改动了哪些文件必须报给用户。**
 - 如果用户明确要求保留项目原端口（例如别的客户端已经固定用它），**停下来问**，不要强行统一 —— 本技能的默认策略是统一到 20000。
 
-**DSH 侧不是 20000 时**：备份 `cordis.patch.yml`，把 `unity-mcp` 行的 `url:` 改成 `http://localhost:20000/mcp`；profile 有 `patchReload: live` 则存盘即热重载，否则重启 DSH。只改这一行。
+**DSH 侧不是 20000 时**：bundle 默认本来就是 20000，所以先找**覆盖行**——profile 层 `cordis.patch.yml` 里的 `unity-mcp` 条目（旧版本插件留下的是一整个 `- insert:` 块）。备份该文件，把它的 `url:` 改成 `http://localhost:20000/mcp`，或者整块删掉、回落到 bundle 默认；profile 有 `patchReload: live` 则存盘即热重载，否则重启 DSH。只改这一处。
+
+> ⚠️ 桌面端会把 profile 层的 `cordis.patch.yml` 当成自己设置的导出文件重写。把标准配置只写在那里不稳：能删覆盖行就删，靠 bundle 提供。
 
 ## 5. 把 AI agent 配成 Kilo Code（`.kilocode\mcp.json`）
 
@@ -161,6 +171,7 @@ DSH 侧只有一条真正的实测：**调用 `unity_mcp_activate`**。
 | Unity 编辑器 | 运行中 / 未运行 |
 | Unity 侧端口 | 原 24009 → 已统一 20000（附备份路径）/ 本来就是 20000 |
 | DSH 侧 url | `http://localhost:20000/mcp`（一致 / 已改） |
+| 插件加载 | bundle 已插入 `unity-mcp` 行（0.5.0）/ bundle 为空 → 已升级或补了覆盖行 |
 | AI agent | Kilo Code：`.kilocode\mcp.json` → `http://localhost:20000/p/<pin>`；`skillsPath=.kilocode\skills` |
 | 工具集 | 只有 `tool-set-enabled-state` 为 `[enabled]` |
 | `unity_mcp_activate` | 成功 / 失败（原文错误） |
@@ -183,3 +194,6 @@ DSH 侧只有一条真正的实测：**调用 `unity_mcp_activate`**。
 | 凭空多出个监听 8080 的 `gamedev-mcp-server` | 对 server exe 跑了裸 `--help`（它不是帮助，是直接启动） | 按端口找 PID 杀掉（`Get-NetTCPConnection -LocalPort 8080`）；只用 `configure --help` 这类子命令帮助 |
 | DSH 通、Kilo Code 连不上 | `.kilocode\mcp.json` 里 pin 的端口不是 20000（端口改过后没重配 agent） | 重跑 `configure --agent kilo-code --url http://localhost:20000`，再核对 `url` 里的端口 |
 | `mcp__unity__gameobject-find` 之类报 `tool not found` | 命令目录是按旧插件版本生成的（1.2.0 已移除 `gameobject-*` / `assets-*` / `scene-*` / `profiler-*` 等） | 按第 6 步做目录版本自检并重生成 + 重启 `dsh web`；读写 Unity 内容改走 `rql-query` / `rql-mutate` / `rql-schema` |
+| 插件页显示「已安装，未生效」 | bundle 没有插入插件行（0.4.0 及以前 bundle patch 是 `[]`），或 profile 的 `dsh.profile.bundles` 里没有这个包 | 升级到 ≥0.5.0（行随 bundle 提供）；确认 `dsh.profile.bundles` 含 `dsh-unity-mcp-bridge`；重启 |
+| 重启后手写进 profile 层的配置不见了 | 桌面端把 profile 的 `cordis.patch.yml` 当自己的设置导出重写，不在它设置模型里的条目会被抹掉 | 插件行交给 bundle，别手写；其它设置走 UI |
+| 桌面端启动即崩，日志是 `webserver: host "0.0.0.0" is an unspecified (wildcard) address` | 从旧备份恢复的 `webserver` 块用了 `0.0.0.0`，当前版本拒绝通配监听 | 删掉该块或改成具体网卡 IPv4；局域网访问走 UI 的 remote-web-ui 开关，别手填 `0.0.0.0` |
