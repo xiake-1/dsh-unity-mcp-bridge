@@ -1,6 +1,6 @@
 ---
 name: unity-mcp-install
-description: 在当前工作区的 Unity 项目里安装 Unity-MCP 插件与其 MCP Server（GameDev-MCP-Server）：先查 unity-mcp-cli（缺则 npm install -g unity-mcp-cli，版本要与插件对齐），再对工作区内探测到的 Unity 项目执行 unity-mcp-cli install-plugin --with-server；下载失败时用本机代理（如 Clash）或离线 zip 兜底。含项目定位、已装判定与验证。
+description: 在当前工作区的 Unity 项目里安装 Unity-MCP 插件与其 MCP Server（GameDev-MCP-Server）：先查 unity-mcp-cli（缺则 npm install -g unity-mcp-cli，版本要与插件对齐），再对工作区内探测到的 Unity 项目执行 unity-mcp-cli install-plugin --with-server；下载失败时用本机代理（如 Clash）或离线 zip 兜底。含项目定位、已装判定与验证；装了或升级了插件版本还要重生成桥接自带的命令目录（命令名随插件版本变）。
 whenToUse: 用户要求「在工作区的 Unity 项目里安装 / 补装 Unity-MCP 插件（AI Game Developer）」时；或 unity-mcp-check 报「Unity 项目里没有 MCP 包」时。
 ---
 
@@ -174,9 +174,19 @@ Push-Location $proj; & "$env:USERPROFILE\.ai-game-dev\server\win-x64\gamedev-mcp
 1. 用 Unity 打开该项目（`unity-mcp-cli open $proj`）—— 包在编辑器里解析，`Library/PackageCache/` 才会出现。
 2. 在 Unity 里打开 **Window → AI Game Developer**，确认连接方式（自建本地端点选 Custom，或走 Cloud），并把顶部的 **AI agent** 选成要用的那个（如 **Kilo Code**）—— Skills 的自动生成只认这个下拉框，CLI 的 `setup-skills` 不支持 `kilo-code`。
 3. 回到 DSH 跑 `/unity-mcp-check`：它会把两端端口统一到 **20000**、把 AI agent 配成 **Kilo Code**（写 `.kilocode\mcp.json`）、把 Unity 工具集初始化成只留 `tool-set-enabled-state`，再实测连通性。
+4. **本次装了或升级了插件版本 → 必须重生成桥接自带的命令目录**，否则 `/unity-mcp-tools` 会教模型去开不存在的命令。命令名随插件版本变（实测 0.9x = 73 个；1.2.0 = 18 个，`assets-*` / `gameobject-*` / `scene-*` / `profiler-*` 等已被 `rql-query` / `rql-mutate` / `rql-schema` 取代）：
+
+   ```powershell
+   # 桥接目录是按哪个版本生成的（SKILL.md 标题行）
+   Select-String -Path (Join-Path $env:DSH_PROFILE_DIR 'node_modules\dsh-unity-mcp-bridge\skills\SKILL.md') `
+     -Pattern 'com\.ivanmurzak\.unity\.mcp@'
+   # 与项目里的包版本不一致 → 重生成，然后重启 dsh web（技能在插件启动时注册，不重启不生效）
+   powershell -NoProfile -ExecutionPolicy Bypass -File "<dsh-unity-mcp-bridge>\tools\generate-unity-mcp-catalog.ps1" -ProjectRoot $proj
+   ```
 
 ## 注意
 
 - 不要手改 `Library/`；不要在工作区外装插件。
 - 本技能只负责 **Unity 侧**。DSH 侧的依赖与 `cordis.patch.yml` 配置属于 `dsh-unity-mcp-bridge` 自身；端口/端点不匹配由 `/unity-mcp-check` 修正。
+- 需要额外子系统的命令时才装扩展：`unity-mcp-cli install-extension <id|名称> $proj`（幂等；10 个：Animation 6 / Cinemachine 5 / InputSystem 7 / Navigation 11 / ParticleSystem 2 / ProBuilder 5 / Splines 6 / Terrain 5 / Tilemap 5 / Timeline 5 个命令）。包内 `extensions.compatibility.json` 有门槛：`minimumUnityVersion: 6000.6`，且 Navigation 需 `com.unity.ai.navigation@2.0.10`、ProBuilder 需 `com.unity.probuilder@6.1.3`、Tilemap 需 `com.unity.2d.tilemap.extras@7.0.1` —— 2022.x 工程装不上这三个。装了扩展同样要重生成命令目录（或用 `unity-tool-list` 看实时清单）。
 - 与 `install-plugin` 无关的 `install-unity`（装编辑器）、`create-project`（建项目）只在与用户确认后才用。

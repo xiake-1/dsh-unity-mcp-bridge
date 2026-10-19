@@ -1,6 +1,6 @@
 ---
 name: unity-mcp-check
-description: 检查 DSH 的 unity-mcp-bridge 与 Unity 项目的 MCP 插件是否连通：两端端口统一到 20000（项目侧不是 20000 就用 bootstrap-local 改过来）、把 AI agent 配成 Kilo Code（写 .kilocode/mcp.json，端口跟着 20000）、按 reference/tool.md 把 Unity 工具集初始化为只留 tool-set-enabled-state，再用 unity_mcp_activate 实测。
+description: 检查 DSH 的 unity-mcp-bridge 与 Unity 项目的 MCP 插件是否连通：两端端口统一到 20000（项目侧不是 20000 就用 bootstrap-local 改过来）、把 AI agent 配成 Kilo Code（写 .kilocode/mcp.json，端口跟着 20000）、按 reference/tool.md 把 Unity 工具集初始化为只留 tool-set-enabled-state、自检 /unity-mcp-tools 的命令目录是否按当前插件版本生成（命令名随版本变），再用 unity_mcp_activate 实测。
 whenToUse: 用户要求「检查 / 排查 Unity-MCP 连接」，或 unity_mcp_activate 连不上、/unity-mcp-tools 激活失败、刚跑完 /unity-mcp-install 时。
 ---
 
@@ -118,10 +118,23 @@ unity-mcp-cli configure $proj --list | Select-String '\[enabled\]'   # 复验：
 
 - ⚠️ **顺序陷阱（实测）**：`--disable-all-tools` 与 `--enable-tools` **不能写在同一条命令里** —— disable-all 会覆盖 enable，结果连唯一的开关 `tool-set-enabled-state` 都被关掉（0 个启用），那就再也没有工具能把它开回来。必须分两条：先 disable-all，再 enable-tools。
 - 万一已经被全部关掉：单独跑一条 `unity-mcp-cli configure $proj --enable-tools tool-set-enabled-state` 即可救回，不用重装插件。
-- 复验结果应当**只有** `tool-set-enabled-state` 是 `[enabled]`，其余全是 `[disabled]`（参考实测：1 enabled / 119 disabled）。
+- 复验结果应当**只有** `tool-set-enabled-state` 是 `[enabled]`，其余全是 `[disabled]`（注册总数随插件版本变：1.2.0 实测 **1 enabled / 17 disabled**，总数 18；0.9x 是 73。看到 18 不是「工具变少了」，是版本差异，见下面第 7 条）。
 - 这一步直接读写项目配置，**不需要 Unity 在运行**。
 - prompts / resources 默认全关，保持关闭即可；除非用户明确要求，不要打开。
 - 需要别的命令时，交给 `/unity-mcp-tools` 的按需流程（开启 → 用 → `unity_tools_restore` 收回），不要在这里预先全开：每个已启用命令的 schema 都会进入之后每一次模型请求。
+- **命令目录版本自检（必做）**：`/unity-mcp-tools` 的索引和 `reference/*.md` 是按某个插件版本从源码生成的，**命令名随版本变**。比对两边，不一致就提示重生成，不要照着旧目录去开工具：
+
+  ```powershell
+  # 桥接自带的目录是按哪个版本生成的（SKILL.md 标题行）
+  Select-String -Path (Join-Path $prof 'node_modules\dsh-unity-mcp-bridge\skills\SKILL.md') `
+    -Pattern 'com\.ivanmurzak\.unity\.mcp@'
+  # 项目里实际装的版本
+  (Get-ChildItem (Join-Path $proj 'Library\PackageCache') -Directory -Filter 'com.ivanmurzak.unity.mcp@*').Name
+  # 不一致 → 重生成命令目录，然后重启 dsh web（技能在插件启动时注册，不重启不生效）
+  powershell -NoProfile -ExecutionPolicy Bypass -File "<dsh-unity-mcp-bridge>\tools\generate-unity-mcp-catalog.ps1" -ProjectRoot $proj
+  ```
+
+  实测代价：目录停在 0.91.0 而项目已是 1.2.0 时，18 个分类文件里有 13 个写的是**已删除**的命令（`gameobject-*`、`assets-*`、`scene-*`、`profiler-*`、`console-*`、`editor-application-*`、`editor-selection-*`、`object-*`、`reflection-method-*`、`type-get-json-schema`），1.2.0 由 `rql-query` / `rql-mutate` / `rql-schema` 承担 —— 照旧目录调用必然 `tool not found`。
 
 ## 7. 探测与实测
 
@@ -143,6 +156,7 @@ DSH 侧只有一条真正的实测：**调用 `unity_mcp_activate`**。
 |---|---|
 | `unity-mcp-cli` | 已装 v1.2.0（与插件 lockstep）/ 未装 / 已升级 0.91.0 → 1.2.0 |
 | Unity 包 `com.ivanmurzak.unity.mcp` | 已装 1.2.0 / 未装 |
+| 命令目录（`/unity-mcp-tools`） | 按 1.2.0 生成，与项目一致 / 按 0.91.0 生成 → 已重生成（需重启 `dsh web`） |
 | MCP Server | 项目 `Library\mcp-server\win-x64\` 9.2.11 + CLI 托管目录 `~\.ai-game-dev\server\win-x64\`（含 `version` 标记）/ 缺 |
 | Unity 编辑器 | 运行中 / 未运行 |
 | Unity 侧端口 | 原 24009 → 已统一 20000（附备份路径）/ 本来就是 20000 |
@@ -168,3 +182,4 @@ DSH 侧只有一条真正的实测：**调用 `unity_mcp_activate`**。
 | `No managed GameDev-MCP-Server binary found …` | 没装托管 Server（缺 `--with-server`） | 跑 `/unity-mcp-install` 的 `install-plugin --with-server`；或临时用项目 `Library\mcp-server\<rid>\gamedev-mcp-server.exe` 直接跑 `configure --agent` |
 | 凭空多出个监听 8080 的 `gamedev-mcp-server` | 对 server exe 跑了裸 `--help`（它不是帮助，是直接启动） | 按端口找 PID 杀掉（`Get-NetTCPConnection -LocalPort 8080`）；只用 `configure --help` 这类子命令帮助 |
 | DSH 通、Kilo Code 连不上 | `.kilocode\mcp.json` 里 pin 的端口不是 20000（端口改过后没重配 agent） | 重跑 `configure --agent kilo-code --url http://localhost:20000`，再核对 `url` 里的端口 |
+| `mcp__unity__gameobject-find` 之类报 `tool not found` | 命令目录是按旧插件版本生成的（1.2.0 已移除 `gameobject-*` / `assets-*` / `scene-*` / `profiler-*` 等） | 按第 6 步做目录版本自检并重生成 + 重启 `dsh web`；读写 Unity 内容改走 `rql-query` / `rql-mutate` / `rql-schema` |
