@@ -40,8 +40,37 @@ dsh plugin --profile <profile> add file:<path-to-this-checkout>
 | 技能 | 用途 |
 |---|---|
 | `/unity-mcp-tools` | 打开 Unity 能力：激活 → 查命令目录 → 按需开启 → 用完恢复休眠 |
-| `/unity-mcp-install` | 在工作区内定位 Unity 项目，安装 Unity-MCP 插件**与 MCP Server**（`--with-server`）；缺 `unity-mcp-cli` 就先装、并核对 CLI/插件/Server 版本 lockstep；GitHub 下载失败时用本机代理（Clash，需 `NODE_USE_ENV_PROXY=1`）重试，或离线 zip 过 `SHA256SUMS` 校验后 `--server-source` |
-| `/unity-mcp-check` | 把两端端口统一到 **20000**、把 AI agent 配成 **Kilo Code**（写 `.kilocode/mcp.json`，走 `configure --agent` 而不是 `setup-mcp`）、把工具集初始化成只留 `tool-set-enabled-state`，再实测连通性 |
+| `/unity-mcp-install` | 在工作区内定位 Unity 项目，安装 Unity-MCP 插件**与 MCP Server**（`--with-server`）；**先看 `vendor/` 离线包**（有则 `tools/offline-package.mjs install` 写 `file:` 本地依赖 + `--server-source`，不联网）；缺 `unity-mcp-cli` 就先装、并核对 CLI/插件/Server 版本 lockstep；GitHub 下载失败时用本机代理（Clash，需 `NODE_USE_ENV_PROXY=1`）重试，或离线 zip 过 `SHA256SUMS` 校验后 `--server-source` |
+| `/unity-mcp-check` | 把两端端口统一到 **20000**、把 AI agent 配成 **Kilo Code**（写 `.kilocode/mcp.json`，走 `configure --agent` 而不是 `setup-mcp`）、把工具集初始化成只留 `tool-set-enabled-state`、**比对「上游最新 / `vendor/` 离线包 / 项目已装」三层版本并给出更新路径**（下载新版本优先走代理），再实测连通性 |
+
+## 离线包与更新检查（`vendor/`）
+
+上游 `com.ivanmurzak.unity.mcp` 已经发到 **180 个 release**（`0.8.3` 2025-06-23 → `1.5.0` 2026-10-24），改得最狠的是 **`1.0.0`（2026-10-15）：RQL 取代数据类工具**（`feat(rql)!` 两条 breaking），命令从 0.9x 的 73 个细粒度命令缩到 18 个（`rql-query` / `rql-mutate` / `rql-schema`）—— 桥接的命令目录必须跟着重生成。其余大改造：`0.81.0`（MCP Server 拆成共享的 `GameDev-MCP-Server`，从此 Server 独立编号）、`0.84.0`/`0.85.0`（鉴权与 `ConnectionConfig.Token` 迁移、`cloudToken` 移除）、`1.1.0`（扩展包独立发布，现为 `2.0.x`）、`1.3.0`（`script-execute` 换 Code-Exec、CLI editor sessions、McpPlugin 8.11.0 工具超时）、`1.5.0`（独立 CLI 与 App skills）。
+
+`vendor/` 就是为「GitHub 不通也能装」准备的离线包（明细见 [vendor/README.md](vendor/README.md)）：
+
+| 内容 | 版本 | 校验 |
+|---|---|---|
+| `com.ivanmurzak.unity.mcp-1.5.0.tgz` | 插件 1.5.0（833,033 B） | SHA256 `7f32ec8e…417506` |
+| `gamedev-mcp-server-win-x64-9.2.17.zip` | Server 9.2.17（45,558,728 B） | 对官方 `SHA256SUMS` 校验通过 |
+
+**lockstep 不靠猜**：脚本从 tarball 里的 `Editor/Scripts/McpServerManager.cs` 读 `ServerVersion` 常量 —— 插件 1.5.0 钉 Server **9.2.17**；CLI 与插件同号（1.5.0）。
+
+```powershell
+# 查：上游最新 / vendor 离线包 / 项目已装 三层比对（--project 指 Unity 工程）
+node "<插件目录>\tools\offline-package.mjs" check --project <Unity工程> --cli-version (unity-mcp-cli --version)
+
+# 下载新版本：优先代理（GitHub release 资产直连常被掐断），断点续传 + SHA256 校验
+$env:HTTPS_PROXY = 'http://127.0.0.1:7897'; $env:NODE_USE_ENV_PROXY = '1'
+node "<插件目录>\tools\offline-package.mjs" fetch
+
+# 装到新的 Unity 工程：写 file: 本地依赖（自动备份 manifest）+ 离线补 Server
+node "<插件目录>\tools\offline-package.mjs" install --project <Unity工程>
+unity-mcp-cli install-plugin <Unity工程> --with-server --server-version 9.2.17 `
+  --server-source "<插件目录>\vendor\gamedev-mcp-server-win-x64-9.2.17.zip"
+```
+
+> `unity-mcp-cli install-plugin` **没有** `--plugin-source`；离线靠 Unity 官方支持的 `file:` 本地 tarball 依赖。CLI 对 `file:` / `git+` / `http:` 这类非 semver 依赖不会覆盖（`dist/utils/manifest.js` 的 `nonSemverPrefixes`），所以之后重跑 `install-plugin` 也不会把它改回版本号。
 
 ## 用法（按需工作流）
 

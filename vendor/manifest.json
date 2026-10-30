@@ -1,0 +1,33 @@
+{
+  "generatedAt": "2026-10-30T14:25:56.337Z",
+  "plugin": {
+    "packageId": "com.ivanmurzak.unity.mcp",
+    "version": "1.5.0",
+    "file": "com.ivanmurzak.unity.mcp-1.5.0.tgz",
+    "bytes": 833033,
+    "sha256": "7f32ec8e3e280f6d36e3747faf0c6f1677feae377a8cf3502e0c1860bf417506",
+    "pinnedServerVersion": "9.2.17",
+    "sources": [
+      "https://package.openupm.com/com.ivanmurzak.unity.mcp/-/com.ivanmurzak.unity.mcp-1.5.0.tgz",
+      "https://github.com/IvanMurzak/Unity-MCP/releases/download/1.5.0/com.ivanmurzak.unity.mcp-1.5.0.tgz"
+    ]
+  },
+  "server": {
+    "version": "9.2.17",
+    "rid": "win-x64",
+    "file": "gamedev-mcp-server-win-x64-9.2.17.zip",
+    "bytes": 45558728,
+    "sha256": "cb48cae2c61971c4dd717675e5bfa6510fe3699206a05f68b8d01708f1353a0f",
+    "sha256sums": "https://github.com/IvanMurzak/GameDev-MCP-Server/releases/download/v9.2.17/SHA256SUMS",
+    "verified": true
+  },
+  "cli": {
+    "npmPackage": "unity-mcp-cli",
+    "expectedVersion": "1.5.0"
+  },
+  "upstreamAtCheck": {
+    "pluginLatest": "1.5.0",
+    "serverLatest": "9.2.17",
+    "cliLatest": "1.5.0"
+  }
+}

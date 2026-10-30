@@ -1,7 +1,7 @@
 ---
 name: unity-mcp-check
-description: 检查 DSH 的 unity-mcp-bridge 与 Unity 项目的 MCP 插件是否连通：两端端口统一到 20000（项目侧不是 20000 就用 bootstrap-local 改过来）、把 AI agent 配成 Kilo Code（写 .kilocode/mcp.json，端口跟着 20000）、按 reference/tool.md 把 Unity 工具集初始化为只留 tool-set-enabled-state、自检 /unity-mcp-tools 的命令目录是否按当前插件版本生成（命令名随版本变），再用 unity_mcp_activate 实测。
-whenToUse: 用户要求「检查 / 排查 Unity-MCP 连接」，或 unity_mcp_activate 连不上、/unity-mcp-tools 激活失败、刚跑完 /unity-mcp-install 时。
+description: 检查 DSH 的 unity-mcp-bridge 与 Unity 项目的 MCP 插件是否连通：两端端口统一到 20000（项目侧不是 20000 就用 bootstrap-local 改过来）、把 AI agent 配成 Kilo Code（写 .kilocode/mcp.json，端口跟着 20000）、按 reference/tool.md 把 Unity 工具集初始化为只留 tool-set-enabled-state、自检 /unity-mcp-tools 的命令目录是否按当前插件版本生成（命令名随版本变）、用 tools/offline-package.mjs check 比对「上游最新 / vendor 离线包 / 项目已装」三层版本并给出更新路径（下载新版本优先走代理，断点续传 + SHA256 校验），再用 unity_mcp_activate 实测。
+whenToUse: 用户要求「检查 / 排查 Unity-MCP 连接」或「AI Game Developer / Unity-MCP 有没有新版本、要不要升级」，或 unity_mcp_activate 连不上、/unity-mcp-tools 激活失败、刚跑完 /unity-mcp-install 时。
 ---
 
 # 检查 DSH ↔ Unity-MCP 连接
@@ -146,7 +146,41 @@ unity-mcp-cli configure $proj --list | Select-String '\[enabled\]'   # 复验：
 
   实测代价：目录停在 0.91.0 而项目已是 1.2.0 时，18 个分类文件里有 13 个写的是**已删除**的命令（`gameobject-*`、`assets-*`、`scene-*`、`profiler-*`、`console-*`、`editor-application-*`、`editor-selection-*`、`object-*`、`reflection-method-*`、`type-get-json-schema`），1.2.0 由 `rql-query` / `rql-mutate` / `rql-schema` 承担 —— 照旧目录调用必然 `tool not found`。
 
-## 7. 探测与实测
+## 7. 版本与更新检查（必做；默认只报告，不擅自升级）
+
+一次比三层：**上游最新 / 插件自带 `vendor/` 离线包 / 项目已装**，外加 `unity-mcp-cli`。
+
+```powershell
+# <bridge> = 插件目录（已安装副本：%DSH_PROFILE_DIR%\node_modules\dsh-unity-mcp-bridge）
+# 代理优先：GitHub 的 release 资产直连常被掐断（实测 ECONNRESET on release-assets.githubusercontent.com）
+$px = (Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings' |
+        Where-Object ProxyEnable -eq 1).ProxyServer          # 实测 127.0.0.1:7897，别猜端口
+if ($px) { $env:HTTPS_PROXY = "http://$px"; $env:NODE_USE_ENV_PROXY = '1' }
+node "<bridge>\tools\offline-package.mjs" check --project $proj --cli-version (unity-mcp-cli --version)
+```
+
+- 脚本无第三方依赖（Node 24）。`--json` 给出机器可读结果；`--no-proxy` 强制直连。
+- **`NODE_USE_ENV_PROXY=1` 不能省**：Node 24 的全局 `fetch` 否则无视 `HTTPS_PROXY`（实测设了等于没设）。脚本自己会补，外层也设上更稳；也可以直接 `--proxy http://127.0.0.1:<port>`。
+- 网络策略是「代理 ↔ 直连互为兜底」：查询类（OpenUPM / npm / GitHub API）先直连，**下载类（Server zip、`SHA256SUMS`）先代理**，失败再直连。
+- **lockstep 判据不是「谁新用谁」**：插件 tarball 里 `Editor/Scripts/McpServerManager.cs` 的 `ServerVersion` 常量才是目标 —— 插件 `1.5.0` 钉 Server **`9.2.17`**；CLI 与插件同号（`1.5.0`）。脚本直接从 tarball 读这个常量，写进 `vendor/manifest.json` 的 `plugin.pinnedServerVersion`。
+- 项目侧读两处：`Packages\manifest.json` 的依赖（可能是 `file:…` 本地包依赖）与 `Library\PackageCache\com.ivanmurzak.unity.mcp@*`。
+
+### 7.1 要更新时：优先用代理把新版本拉到 `vendor/`，再安装
+
+```powershell
+node "<bridge>\tools\offline-package.mjs" fetch --plugin-version <latest>    # 不给版本就取上游最新
+node "<bridge>\tools\offline-package.mjs" install --project $proj --dry-run  # 先看会改什么
+node "<bridge>\tools\offline-package.mjs" install --project $proj
+unity-mcp-cli install-plugin $proj --with-server --server-version <pinned> `
+  --server-source "<bridge>\vendor\gamedev-mcp-server-<rid>-<ver>.zip"
+```
+
+- 下载有 4 次退避重试，失败保留 `.part`，重跑从断点续传（实测 GitHub 资产这一步会 `ECONNRESET`，第一次失败、第二次即通）。
+- zip 的 SHA256 对着**同一 release** 的 `SHA256SUMS` 校验，不匹配直接失败退出，不会留下「装上了但内容不对」的包。
+- 装完照第 6 步末尾**重生成命令目录**并重启 `dsh web`（命令名随插件版本变）。
+- 用户没点头就不升级：本技能的默认动作是**报告 + 给出可复制的命令**，升级动作交给 `/unity-mcp-install` 5.2。
+
+## 8. 探测与实测
 
 ```powershell
 Test-NetConnection -ComputerName localhost -Port 20000 -InformationLevel Quiet
@@ -160,12 +194,13 @@ DSH 侧只有一条真正的实测：**调用 `unity_mcp_activate`**。
 - 成功 → 桥接连上并注册 `mcp__unity__*` 工具，检查完成；若本次任务不需要 Unity，立刻 `unity_tools_restore` 回到休眠（它同时把工具集还原成只留 `tool-set-enabled-state`）。
 - 失败 → 保留错误原文（`ECONNREFUSED` = 20000 没人听；404/405 = 端点路径不对；401/403 = token 不对），再回到第 4 步核对两端端口。
 
-## 8. 报告格式
+## 9. 报告格式
 
 | 检查项 | 结果 |
 |---|---|
 | `unity-mcp-cli` | 已装 v1.2.0（与插件 lockstep）/ 未装 / 已升级 0.91.0 → 1.2.0 |
 | Unity 包 `com.ivanmurzak.unity.mcp` | 已装 1.2.0 / 未装 |
+| 版本检查（第 7 步） | 上游 plugin 1.5.0 / server 9.2.17 / cli 1.5.0 ｜ vendor 1.5.0 + 9.2.17（钉住 9.2.17）｜ 项目 1.5.0 → 一致 / 落后（已给 `fetch`+`install` 命令，未擅自升级） |
 | 命令目录（`/unity-mcp-tools`） | 按 1.2.0 生成，与项目一致 / 按 0.91.0 生成 → 已重生成（需重启 `dsh web`） |
 | MCP Server | 项目 `Library\mcp-server\win-x64\` 9.2.11 + CLI 托管目录 `~\.ai-game-dev\server\win-x64\`（含 `version` 标记）/ 缺 |
 | Unity 编辑器 | 运行中 / 未运行 |
@@ -197,3 +232,6 @@ DSH 侧只有一条真正的实测：**调用 `unity_mcp_activate`**。
 | 插件页显示「已安装，未生效」 | bundle 没有插入插件行（0.4.0 及以前 bundle patch 是 `[]`），或 profile 的 `dsh.profile.bundles` 里没有这个包 | 升级到 ≥0.5.0（行随 bundle 提供）；确认 `dsh.profile.bundles` 含 `dsh-unity-mcp-bridge`；重启 |
 | 重启后手写进 profile 层的配置不见了 | 桌面端把 profile 的 `cordis.patch.yml` 当自己的设置导出重写，不在它设置模型里的条目会被抹掉 | 插件行交给 bundle，别手写；其它设置走 UI |
 | 桌面端启动即崩，日志是 `webserver: host "0.0.0.0" is an unspecified (wildcard) address` | 从旧备份恢复的 `webserver` 块用了 `0.0.0.0`，当前版本拒绝通配监听 | 删掉该块或改成具体网卡 IPv4；局域网访问走 UI 的 remote-web-ui 开关，别手填 `0.0.0.0` |
+| `check` 某层显示 `?` 或报「…失败」 | 代理与直连都失败（GitHub API 被掐 / npm 超时） | 设 `HTTPS_PROXY` + `NODE_USE_ENV_PROXY=1`（或直接 `--proxy http://127.0.0.1:<port>`）重跑；插件版本可 `--plugin-version` 手工指定 |
+| `fetch` 报 `SHA256 不匹配` | 下载被中间盒改写，或复用了半截文件 | 删掉该 zip 与 `*.part`，重跑 `fetch --force`；仍不匹配就换代理节点 |
+| `fetch` 报 `下载不完整 …（保留 .part，可重跑续传）` | 连接被掐断（实测 GitHub release 资产会） | 直接重跑 `fetch`，从 `.part` 续传，别手删 |

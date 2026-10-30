@@ -92,12 +92,50 @@ commands:
 
 | Skill | What it does |
 |---|---|
-| `/unity-mcp-install` | Checks whether `unity-mcp-cli` is on the machine — installs it with `npm install -g unity-mcp-cli` when it is missing, and checks that its **version matches the project's plugin**: CLI 1.2.0 ↔ plugin `com.ivanmurzak.unity.mcp@1.2.0` ↔ server `9.2.11` are lockstep, and an old CLI silently carries an older AI-agent list (no `kilo-code`). Then it finds the Unity project **inside the current workspace** (by `ProjectSettings/ProjectVersion.txt`). If `com.ivanmurzak.unity.mcp` is already in `Packages/manifest.json` it says so; otherwise it runs `unity-mcp-cli install-plugin <project> --with-server` — which also stages the `GameDev-MCP-Server` binary into the CLI's managed dir (`~/.ai-game-dev/server/<rid>/`, the thing `configure --agent` executes) — and re-reads the manifest to verify. When the GitHub download fails on a restricted network it retries through the machine's own system proxy (Clash): the port is read from the registry instead of guessed, `NODE_USE_ENV_PROXY=1` is mandatory because Node 24's global `fetch` otherwise ignores `HTTP_PROXY`, and `NO_PROXY` must keep OpenUPM/npm direct or even plugin-version resolution breaks. Last resort: a resumable proxied zip download verified against the release `SHA256SUMS`, installed with `--server-source`. |
-| `/unity-mcp-check` | Finds the same project and pins **everything to port 20000**. The Unity side is rewritten with `unity-mcp-cli bootstrap-local --url http://localhost:20000/` (the project's own `UserSettings/AI-Game-Developer-Config.json`, after a timestamped backup and a `--dry-run` diff); the DSH side's `unity-mcp` row is corrected to `http://localhost:20000/mcp` when it drifted; other clients still pinned to the old port are reported rather than silently broken. **Then it sets the AI agent to Kilo Code**: `unity-mcp-cli configure <project> --agent kilo-code --url http://localhost:20000` writes `.kilocode/mcp.json` whose `url` is `http://localhost:20000/p/<pin>` — the port follows `--url`, the path is the per-project pin, and both `/mcp` and `/p/<pin>` answer `200`. `setup-mcp` cannot do this (its list has 14 agents, no `kilo-code`), so the skill uses `configure --agent`, which proxies to the managed server's configurator (16 agents), and falls back to the project's own `Library/mcp-server/<rid>/gamedev-mcp-server.exe` when the managed binary is missing. Kilo Code *skills* come from the Editor's Auto-generate (`skillAutoGenerate` / `skillsPath: .kilocode/skills`), since `setup-skills` lacks the id too. It then initializes the Unity tool set to a single enabled tool — `tool-set-enabled-state`, the same keep-set `unity_tools_restore` uses — with two `unity-mcp-cli configure` calls — `--disable-all-tools`, then `--enable-tools tool-set-enabled-state`; they must **not** be combined, because disable-all wins and would turn off the one management tool that can undo it (no running Editor needed), probes the port and HTTP endpoint, and finishes by loading the bridge with `unity_mcp_activate` to prove the link. |
+| `/unity-mcp-install` | Checks whether `unity-mcp-cli` is on the machine — installs it with `npm install -g unity-mcp-cli` when it is missing, and checks that its **version matches the project's plugin**: CLI 1.2.0 ↔ plugin `com.ivanmurzak.unity.mcp@1.2.0` ↔ server `9.2.11` are lockstep, and an old CLI silently carries an older AI-agent list (no `kilo-code`). Then it finds the Unity project **inside the current workspace** (by `ProjectSettings/ProjectVersion.txt`). If `com.ivanmurzak.unity.mcp` is already in `Packages/manifest.json` it says so; otherwise it runs `unity-mcp-cli install-plugin <project> --with-server` — which also stages the `GameDev-MCP-Server` binary into the CLI's managed dir (`~/.ai-game-dev/server/<rid>/`, the thing `configure --agent` executes) — and re-reads the manifest to verify. When the GitHub download fails on a restricted network it retries through the machine's own system proxy (Clash): the port is read from the registry instead of guessed, `NODE_USE_ENV_PROXY=1` is mandatory because Node 24's global `fetch` otherwise ignores `HTTP_PROXY`, and `NO_PROXY` must keep OpenUPM/npm direct or even plugin-version resolution breaks. Last resort: a resumable proxied zip download verified against the release `SHA256SUMS`, installed with `--server-source`. When the plugin ships its own `vendor/` offline package the skill takes the offline path first: `tools/offline-package.mjs install` writes Unity's `file:` local-tarball dependency (backing up `Packages/manifest.json`) and the server comes from the cached zip via `--server-source`, so a new Unity project installs with no GitHub access at all. |
+| `/unity-mcp-check` | Finds the same project and pins **everything to port 20000**. The Unity side is rewritten with `unity-mcp-cli bootstrap-local --url http://localhost:20000/` (the project's own `UserSettings/AI-Game-Developer-Config.json`, after a timestamped backup and a `--dry-run` diff); the DSH side's `unity-mcp` row is corrected to `http://localhost:20000/mcp` when it drifted; other clients still pinned to the old port are reported rather than silently broken. **Then it sets the AI agent to Kilo Code**: `unity-mcp-cli configure <project> --agent kilo-code --url http://localhost:20000` writes `.kilocode/mcp.json` whose `url` is `http://localhost:20000/p/<pin>` — the port follows `--url`, the path is the per-project pin, and both `/mcp` and `/p/<pin>` answer `200`. `setup-mcp` cannot do this (its list has 14 agents, no `kilo-code`), so the skill uses `configure --agent`, which proxies to the managed server's configurator (16 agents), and falls back to the project's own `Library/mcp-server/<rid>/gamedev-mcp-server.exe` when the managed binary is missing. Kilo Code *skills* come from the Editor's Auto-generate (`skillAutoGenerate` / `skillsPath: .kilocode/skills`), since `setup-skills` lacks the id too. It then initializes the Unity tool set to a single enabled tool — `tool-set-enabled-state`, the same keep-set `unity_tools_restore` uses — with two `unity-mcp-cli configure` calls — `--disable-all-tools`, then `--enable-tools tool-set-enabled-state`; they must **not** be combined, because disable-all wins and would turn off the one management tool that can undo it (no running Editor needed), probes the port and HTTP endpoint, and finishes by loading the bridge with `unity_mcp_activate` to prove the link. Before that it runs `tools/offline-package.mjs check`, which compares **upstream latest / the `vendor/` cache / what the project has installed** (plus the CLI) and prints the proxy-first update path — it reports, it does not upgrade on its own. |
 
 Both follow the documented setup flow at <https://ai-game.dev/engines/unity>. Set
 `registerHelperSkills: false` to ship without them; the configuration table below has the name
 and invocation knobs.
+
+### Offline package cache and update check (`vendor/`)
+
+Upstream `com.ivanmurzak.unity.mcp` has shipped **180 releases** (`0.8.3`, 2025-06-23 → `1.5.0`,
+2026-10-24). The biggest rework is **`1.0.0` (2026-10-15): RQL replaces the data tools** — two
+`feat(rql)!` breaking commits turn the 73 fine-grained commands of the 0.9x line into 18
+(`rql-query` / `rql-mutate` / `rql-schema`), which is exactly why the shipped catalog has to be
+regenerated across that jump. Other large changes: `0.81.0` (the MCP server split out into the
+shared `GameDev-MCP-Server`, versioned separately from then on), `0.84.0` / `0.85.0` (auth rework:
+`ConnectionConfig.Token` migration, `cloudToken` removal), `1.1.0` (extensions released
+independently, now `2.0.x`), `1.3.0` (`script-execute` on Code-Exec, CLI editor sessions,
+McpPlugin 8.11.0 tool timeout), `1.5.0` (standalone CLI and App skills).
+
+`vendor/` caches the installable artifacts so a fresh Unity project can be installed without
+reaching GitHub (details in [vendor/README.md](vendor/README.md)): the plugin tarball
+`com.ivanmurzak.unity.mcp-1.5.0.tgz` (833,033 B) and `gamedev-mcp-server-win-x64-9.2.17.zip`
+(45,558,728 B, verified against the release `SHA256SUMS`). Lockstep is read, not guessed —
+`tools/offline-package.mjs` extracts `McpServerManager.ServerVersion` from the tarball (plugin
+`1.5.0` pins server `9.2.17`), and the CLI shares the plugin's number.
+
+```powershell
+# three-layer check: upstream latest / vendor cache / what the project has
+node "<plugin>\tools\offline-package.mjs" check --project <unity-project> --cli-version (unity-mcp-cli --version)
+
+# refresh: proxy first (GitHub release assets are the flaky leg), resumable, SHA256-verified
+$env:HTTPS_PROXY = 'http://127.0.0.1:7897'; $env:NODE_USE_ENV_PROXY = '1'
+node "<plugin>\tools\offline-package.mjs" fetch
+
+# install into a new Unity project from the local package
+node "<plugin>\tools\offline-package.mjs" install --project <unity-project>   # writes the file: dependency, backs up manifest
+unity-mcp-cli install-plugin <unity-project> --with-server --server-version 9.2.17 `
+  --server-source "<plugin>\vendor\gamedev-mcp-server-win-x64-9.2.17.zip"
+```
+
+`install-plugin` has **no** `--plugin-source`; the offline path is Unity's documented `file:`
+local-tarball dependency, and the CLI never overwrites a `file:` / `git+` / `http:` dependency
+spec (`nonSemverPrefixes` in `dist/utils/manifest.js`), so re-running `install-plugin` afterwards
+is safe.
 
 ## Configuration
 
