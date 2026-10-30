@@ -27,7 +27,7 @@ if ($cli) { unity-mcp-cli --version } else { 'NOT INSTALLED' }
 - 打印 `NOT INSTALLED` → 走第 2 步。
 - 命令在但执行报错，或怀疑「装了但不在 PATH」：`npm ls -g unity-mcp-cli`（全局 bin 目录一般是 `%APPDATA%\npm`）。
 
-**版本对齐（必查，别只看「能不能跑」）**：CLI、Unity 插件、MCP Server 三者版本是 lockstep 的 —— 实测 `unity-mcp-cli 1.2.0` ↔ 插件 `com.ivanmurzak.unity.mcp@1.2.0` ↔ Server `9.2.11`（CLI 的 `dist/utils/server-version.js` 里 `DEFAULT_SERVER_VERSION` 就是插件 `McpServerManager.ServerVersion` 的镜像）。**插件钉住哪个 Server，以插件源码为准，不要猜**：1.5.0 的 tarball 里 `Editor/Scripts/McpServerManager.cs` 写死 `public const string ServerVersion = "9.2.17"`。一条命令把三层（上游最新 / 本地离线包 / 项目已装）全查出来：
+**版本对齐（必查，别只看「能不能跑」）**：CLI、Unity 插件、MCP Server 三者版本是 lockstep 的 —— 实测 `unity-mcp-cli 1.2.0` ↔ 插件 `com.ivanmurzak.unity.mcp@1.2.0` ↔ Server `9.2.11`（CLI 的 `dist/utils/server-version.js` 里 `DEFAULT_SERVER_VERSION` 就是插件 `McpServerManager.ServerVersion` 的镜像）。**插件钉住哪个 Server，以插件源码为准，不要猜**：1.5.0 的 tarball 里 `Editor/Scripts/McpServerManager.cs` 写死 `public const string ServerVersion = "9.2.17"`。升到 CLI 1.5.0 后实测两边同步了：`DEFAULT_SERVER_VERSION` 也是 **9.2.17**；而 `install-plugin` 到 1.5.0 **仍然没有** `--plugin-source`（离线只能走 5.2 的 `file:` 依赖）。一条命令把三层（上游最新 / 本地离线包 / 项目已装）全查出来：
 
 ```powershell
 # <bridge> = 插件目录：源码目录，或已安装副本 %DSH_PROFILE_DIR%\node_modules\dsh-unity-mcp-bridge
@@ -35,7 +35,7 @@ $env:HTTPS_PROXY = 'http://127.0.0.1:7897'; $env:NODE_USE_ENV_PROXY = '1'   # �
 node "<bridge>\tools\offline-package.mjs" check --cli-version (unity-mcp-cli --version)
 ```
 
-老 CLI 的 **AI agent 列表会缺项**：实测 0.91.0 与 1.2.0 的 `setup-mcp --list` 都只有 14 个 agent，**不含 `kilo-code`**；而 Server 自己的 `configure --help` 有 16 个（含 `kilo-code`、`zoo-code`、`other-custom`）。所以 `/unity-mcp-check` 要配 Kilo Code 时，CLI 太旧会直接 `Unknown agent`。
+老 CLI 的 **AI agent 列表会缺项**：实测 0.91.0、1.2.0 与 1.5.0 的 `setup-mcp --list` 都只有 14 个 agent，**不含 `kilo-code`**；而 Server 自己的 `configure --help` 有 16 个（含 `kilo-code`、`zoo-code`、`other-custom`）。所以 `/unity-mcp-check` 要配 Kilo Code 时，CLI 再新也用不了 `setup-mcp`，必须 `configure --agent`。
 
 ```powershell
 npm view unity-mcp-cli version          # registry 上的最新版
@@ -95,8 +95,8 @@ unity-mcp-cli install-plugin $proj --with-server
 
 | 开关 | 用途 |
 |---|---|
-| `--with-server` | 同时下载 GameDev-MCP-Server 二进制（CLI 1.2.0 默认 **9.2.11**，与插件 lockstep） |
-| `--server-version <version>` | 指定要下载的 Server 版本（默认 9.2.11） |
+| `--with-server` | 同时下载 GameDev-MCP-Server 二进制（CLI 1.5.0 默认 **9.2.17**，与插件 `McpServerManager.ServerVersion` 同步；1.2.0 时代是 9.2.11） |
+| `--server-version <version>` | 指定要下载的 Server 版本（CLI 1.5.0 默认 9.2.17） |
 | `--server-source <path-or-url>` | 离线兜底：从本地 zip 或 URL 装 Server（**跳过 SHA256SUMS 校验**，自己核对哈希） |
 | `--plugin-version <version>` | 指定插件版本（默认 latest；离线/代理场景下显式指定可省掉一次 OpenUPM 解析） |
 | `--enroll <code>` / `--enroll-stdin` | 兑换云端 enrollment code（用自建本地端点时不需要） |

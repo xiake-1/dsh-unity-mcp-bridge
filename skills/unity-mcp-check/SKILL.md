@@ -100,7 +100,7 @@ Get-Content (Join-Path $proj '.kilocode\mcp.json') -Raw
 - 实测输出 `Configured Kilo Code (kilo-code).` + `config: <proj>\.kilocode\mcp.json`，写出来的是
   `{"mcpServers":{"ai-game-developer":{"disabled":false,"type":"streamable-http","url":"http://localhost:20000/p/<pin>"}}}`。
   端口跟着 `--url` 走；路径是**项目 pin**（`/p/<pin>`）而不是 `/mcp`。实测 `http://localhost:20000/mcp` 与 `/p/<pin>` 都返回 200，DSH 侧仍固定用 `/mcp`，两边不冲突。
-- ⚠️ **别用 `setup-mcp`**：CLI 0.91.0 与 1.2.0 的 `setup-mcp --list` 都只有 14 个 agent，**不含 `kilo-code`**，直接 `ERROR: Unknown agent: "kilo-code"`。要用 `configure --agent` —— 它代理到托管 Server 的 configurator，那边实测有 16 个 agent（含 `kilo-code`、`zoo-code`、`other-custom`），用 `<server exe> configure --help` 列全。
+- ⚠️ **别用 `setup-mcp`**：CLI 0.91.0、1.2.0 与 **1.5.0** 的 `setup-mcp --list` 都只有 14 个 agent（1.5.0 实测：`antigravity`…`vscode-copilot`，**仍不含 `kilo-code`**），直接 `ERROR: Unknown agent: "kilo-code"`。要用 `configure --agent` —— 它代理到托管 Server 的 configurator，那边实测有 16 个 agent（含 `kilo-code`、`zoo-code`、`other-custom`），用 `<server exe> configure --help` 列全。
 - `configure --agent` 依赖托管二进制 `~\.ai-game-dev\server\<rid>\`；缺了会报 `No managed GameDev-MCP-Server binary found … Run 'unity-mcp-cli install-plugin --with-server' first`。项目里已有 `Library\mcp-server\<rid>\gamedev-mcp-server.exe` 时可直接顶替（实测与 CLI 代理等价）：
 
   ```powershell
@@ -198,7 +198,7 @@ DSH 侧只有一条真正的实测：**调用 `unity_mcp_activate`**。
 
 | 检查项 | 结果 |
 |---|---|
-| `unity-mcp-cli` | 已装 v1.2.0（与插件 lockstep）/ 未装 / 已升级 0.91.0 → 1.2.0 |
+| `unity-mcp-cli` | 已装 v1.5.0（与插件 lockstep）/ 未装 / 已升级 1.2.0 → 1.5.0 |
 | Unity 包 `com.ivanmurzak.unity.mcp` | 已装 1.2.0 / 未装 |
 | 版本检查（第 7 步） | 上游 plugin 1.5.0 / server 9.2.17 / cli 1.5.0 ｜ vendor 1.5.0 + 9.2.17（钉住 9.2.17）｜ 项目 1.5.0 → 一致 / 落后（已给 `fetch`+`install` 命令，未擅自升级） |
 | 命令目录（`/unity-mcp-tools`） | 按 1.2.0 生成，与项目一致 / 按 0.91.0 生成 → 已重生成（需重启 `dsh web`） |
@@ -224,7 +224,7 @@ DSH 侧只有一条真正的实测：**调用 `unity_mcp_activate`**。
 | 401 / 403 | token 缺失或过期 | 用项目配置里的 token；或 `bootstrap-local --url ... --token ...` 重新固定 |
 | 工具全被关掉（含 `tool-set-enabled-state`） | 把 `--disable-all-tools` 与 `--enable-tools` 写进了同一条命令（上面那个顺序陷阱） | 单独跑一条 `unity-mcp-cli configure $proj --enable-tools tool-set-enabled-state` 救回 |
 | 工具名冲突 / 行为异常 | stock `dsh-mcp-client` 与桥接插件同时跑同一 `serverName` | 只留一个 |
-| `ERROR: Unknown agent: "kilo-code"` | 用了 `setup-mcp`（CLI 0.91.0/1.2.0 的列表只有 14 个 agent，不含 `kilo-code`） | 改用 `unity-mcp-cli configure $proj --agent kilo-code --url http://localhost:20000`（托管 Server 侧有 16 个） |
+| `ERROR: Unknown agent: "kilo-code"` | 用了 `setup-mcp`（CLI 0.91.0 / 1.2.0 / 1.5.0 的列表只有 14 个 agent，不含 `kilo-code`） | 改用 `unity-mcp-cli configure $proj --agent kilo-code --url http://localhost:20000`（托管 Server 侧有 16 个） |
 | `No managed GameDev-MCP-Server binary found …` | 没装托管 Server（缺 `--with-server`） | 跑 `/unity-mcp-install` 的 `install-plugin --with-server`；或临时用项目 `Library\mcp-server\<rid>\gamedev-mcp-server.exe` 直接跑 `configure --agent` |
 | 凭空多出个监听 8080 的 `gamedev-mcp-server` | 对 server exe 跑了裸 `--help`（它不是帮助，是直接启动） | 按端口找 PID 杀掉（`Get-NetTCPConnection -LocalPort 8080`）；只用 `configure --help` 这类子命令帮助 |
 | DSH 通、Kilo Code 连不上 | `.kilocode\mcp.json` 里 pin 的端口不是 20000（端口改过后没重配 agent） | 重跑 `configure --agent kilo-code --url http://localhost:20000`，再核对 `url` 里的端口 |
