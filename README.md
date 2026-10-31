@@ -1,72 +1,26 @@
 # dsh-unity-mcp-bridge
 
-> Feature overview and a measured comparison of "tools vs handling it directly from files"
-> (token cost and latency, with the numbers behind them):
-> **[FEATURES-AND-COMPARISON.md](FEATURES-AND-COMPARISON.md)** (Chinese).
->
-> 中文说明（简明版）→ **[README.zh.md](README.zh.md)**
+中文 → [README.zh.md](README.zh.md)
 
-A self-contained **DeepSeek Harness (DSH) plugin** that connects **on demand** to a Unity MCP
-server (AI Game Developer / `com.ivanmurzak.unity.mcp`). It is **dormant until the user runs
-`/unity-mcp-tools`** — Unity capability never turns on by itself (see
-[Activation model](#activation-model-opt-in)). On top of that it adds the three things the
-stock `@deepseek-ai/dsh-mcp-client` does not give you:
+A DeepSeek Harness (DSH) plugin that bridges a Unity MCP server (`com.ivanmurzak.unity.mcp` / AI Game Developer) into DSH. It stays dormant until you ask for Unity.
 
-1. **A vendored implementation** — the bridge lives in this package, so a DSH/npx upgrade
-   cannot silently revert it. (Patching the installed `lib/index.js` gets wiped on upgrade;
-   this does not.)
-2. **A shipped tool catalog skill** — `skills/SKILL.md` (index) plus `skills/reference/*.md`
-   (per-category detail) are registered as a runtime skill at activation. The model loads the
-   index on demand and reads one category file only when it needs it.
-3. **A restore-when-done helper tool** — `unity_tools_restore` disables every Unity tool
-   except the tool-management ones, so an on-demand tool set collapses back to the minimal
-   resident set when the task is over.
+## Intro
 
-It also carries the original fix that makes the workflow possible at all:
-**`resyncAfterTools`** — after a listed tool call returns, the bridge re-fetches `tools/list`
-itself and swaps the registry, instead of waiting for the server's
-`notifications/tools/list_changed` (which DSH's long-lived session does not receive).
-
-## Why not just patch the installed package?
-
-`@deepseek-ai/dsh-mcp-client` is a build artifact inside the npx cache
-(`.../node_modules/@deepseek-ai/dsh-mcp-client/lib/index.js`). `npx @deepseek-ai/dsh` can
-reinstall or upgrade it at any time, silently dropping a hand-applied patch. Vendoring the
-implementation here makes the behaviour yours and version-pinned.
+- Dormant from boot: no connection, no Unity tools — two hook tools, ~224 tokens.
+- `/unity-mcp-tools` then `unity_mcp_activate` connects and registers `mcp__unity__*`.
+- Enabled commands take effect on the **next** step; `unity_tools_restore` disables them and disconnects.
+- Ships the command catalog for plugin 1.2.0 (18 commands, RQL-first) and the `/unity-mcp-install` / `/unity-mcp-check` skills.
+- `resyncAfterTools`: after a management-tool call the bridge re-fetches `tools/list` itself, because DSH's long-lived session never receives `list_changed`.
 
 ## Install
 
-The plugin is a normal npm package with `@deepseek-ai/*` declared as **peer dependencies**
-(the host provides them, exactly like upstream and like third-party plugins such as
-`dshmarket`). Only `@modelcontextprotocol/sdk`, `zod` and `@deepseek-ai/schemastery` are real
-dependencies.
-
-### DSH version compatibility
-
-The five `@deepseek-ai/dsh-*` peers declare a **floor, not a pin** (`>=0.1.5-rc.2`), so one
-checkout installs into any DSH runtime from 0.1.5-rc.2 onward. Verified against the host's own
-gate (`dsh-app-boot` → `evaluatePluginCompatibility`, i.e.
-`semver.satisfies(version, range, { includePrerelease: true })`) for 0.1.5-rc.2, 0.1.7-rc.2 and
-0.2.0-rc.2; the host API this package uses is unchanged across them. `@deepseek-ai/cordis` keeps
-`^4.0.2` — it is a separate version line and the host does not gate it. A genuinely
-incompatible future runtime is still reported by the host's install-time gate.
-
 ```powershell
-# 1) install into the profile that runs the MCP bridge (this profile forwards to pnpm)
-#    <profile> is `web` for `dsh web`, `desktop` for the DeepSeek Harness desktop app
-dsh plugin --profile <profile> add file:<path-to-this-checkout>
-#    or straight from git:
 dsh plugin --profile <profile> add git+https://github.com/xiake-1/dsh-unity-mcp-bridge.git
-
-# 2) nothing to write: the bundle patch inserts the plugin row itself
-#    (id `unity-mcp`, `url: http://localhost:20000/mcp`). A bundle that inserts
-#    no row installs as "installed but not in effect", and a desktop profile
-#    regenerates its own cordis.patch.yml from its settings store, so a row you
-#    add there by hand disappears on the next restart.
 ```
 
-Override the row only when this profile's endpoint differs — a plain `id` entry,
-not a second `insert`, in `%DSH_HOME%/profiles/<profile>/cordis.patch.yml`:
+`<profile>` is `web` (`dsh web`) or `desktop`. Restart the app. The shipped bundle patch inserts the `unity-mcp` row (`http://localhost:20000/mcp`) itself — nothing to write by hand.
+
+Override the row only when this profile uses a different endpoint, in `%DSH_HOME%/profiles/<profile>/cordis.patch.yml`:
 
 ```yaml
 - id: unity-mcp
@@ -74,211 +28,15 @@ not a second `insert`, in `%DSH_HOME%/profiles/<profile>/cordis.patch.yml`:
     url: http://localhost:20000/p/<your-token>
 ```
 
-3. Restart the app (`dsh web`, or the desktop app). The skill and the helper tool appear
-   automatically. If the Plugins page still says the package is installed but not in
-   effect, the profile's bundle list (`dsh.profile.bundles` in its `package.json`) is
-   missing `dsh-unity-mcp-bridge` — that, not the patch, is what makes the bundle load.
+Uninstall: `dsh plugin --profile <profile> remove dsh-unity-mcp-bridge`
 
-> **Do not run this bridge and the stock `@deepseek-ai/dsh-mcp-client` against the same
-> `serverName` at the same time.** They are separate module instances, so each believes it
-> owns the namespace, and both would publish the same public tool names.
+## Usage
 
-## Companion skills: install and check
-
-Two more shipped runtime skills cover the other half of the setup — the Unity-side plugin, and
-the link between the two halves. Unlike the catalog they are **model-visible by default** (they
-are the on-ramp and the doctor, not the Unity capability itself), and both are also slash
-commands:
-
-| Skill | What it does |
+| Entry | What it does |
 |---|---|
-| `/unity-mcp-install` | Checks whether `unity-mcp-cli` is on the machine — installs it with `npm install -g unity-mcp-cli` when it is missing, and checks that its **version matches the project's plugin**: CLI 1.2.0 ↔ plugin `com.ivanmurzak.unity.mcp@1.2.0` ↔ server `9.2.11` are lockstep, and an old CLI silently carries an older AI-agent list (no `kilo-code`). Then it finds the Unity project **inside the current workspace** (by `ProjectSettings/ProjectVersion.txt`). If `com.ivanmurzak.unity.mcp` is already in `Packages/manifest.json` it says so; otherwise it runs `unity-mcp-cli install-plugin <project> --with-server` — which also stages the `GameDev-MCP-Server` binary into the CLI's managed dir (`~/.ai-game-dev/server/<rid>/`, the thing `configure --agent` executes) — and re-reads the manifest to verify. When the GitHub download fails on a restricted network it retries through the machine's own system proxy (Clash): the port is read from the registry instead of guessed, `NODE_USE_ENV_PROXY=1` is mandatory because Node 24's global `fetch` otherwise ignores `HTTP_PROXY`, and `NO_PROXY` must keep OpenUPM/npm direct or even plugin-version resolution breaks. Last resort: a resumable proxied zip download verified against the release `SHA256SUMS`, installed with `--server-source`. When the plugin ships its own `vendor/` offline package the skill takes the offline path first: `tools/offline-package.mjs install` writes Unity's `file:` local-tarball dependency (backing up `Packages/manifest.json`) and the server comes from the cached zip via `--server-source`, so a new Unity project installs with no GitHub access at all. |
-| `/unity-mcp-check` | Finds the same project and pins **everything to port 20000**. The Unity side is rewritten with `unity-mcp-cli bootstrap-local --url http://localhost:20000/` (the project's own `UserSettings/AI-Game-Developer-Config.json`, after a timestamped backup and a `--dry-run` diff); the DSH side's `unity-mcp` row is corrected to `http://localhost:20000/mcp` when it drifted; other clients still pinned to the old port are reported rather than silently broken. **Then it sets the AI agent to Kilo Code**: `unity-mcp-cli configure <project> --agent kilo-code --url http://localhost:20000` writes `.kilocode/mcp.json` whose `url` is `http://localhost:20000/p/<pin>` — the port follows `--url`, the path is the per-project pin, and both `/mcp` and `/p/<pin>` answer `200`. `setup-mcp` cannot do this (its list has 14 agents, no `kilo-code`), so the skill uses `configure --agent`, which proxies to the managed server's configurator (16 agents), and falls back to the project's own `Library/mcp-server/<rid>/gamedev-mcp-server.exe` when the managed binary is missing. Kilo Code *skills* come from the Editor's Auto-generate (`skillAutoGenerate` / `skillsPath: .kilocode/skills`), since `setup-skills` lacks the id too. It then initializes the Unity tool set to a single enabled tool — `tool-set-enabled-state`, the same keep-set `unity_tools_restore` uses — with two `unity-mcp-cli configure` calls — `--disable-all-tools`, then `--enable-tools tool-set-enabled-state`; they must **not** be combined, because disable-all wins and would turn off the one management tool that can undo it (no running Editor needed), probes the port and HTTP endpoint, and finishes by loading the bridge with `unity_mcp_activate` to prove the link. Before that it runs `tools/offline-package.mjs check`, which compares **upstream latest / the `vendor/` cache / what the project has installed** (plus the CLI) and prints the proxy-first update path — it reports, it does not upgrade on its own. |
+| `/unity-mcp-install` | Installs the Unity-side plugin and the MCP Server into the workspace's Unity project |
+| `/unity-mcp-check` | Pins both ends to port 20000, sets the AI agent, initializes the minimal tool set, checks versions |
+| `/unity-mcp-tools` | Opens Unity capability: activate → find the command → enable only what the task needs |
+| `unity_tools_restore` | Disables everything except the management tool and returns to dormant |
 
-Both follow the documented setup flow at <https://ai-game.dev/engines/unity>. Set
-`registerHelperSkills: false` to ship without them; the configuration table below has the name
-and invocation knobs.
-
-### Offline package cache and update check (`vendor/`)
-
-Upstream `com.ivanmurzak.unity.mcp` has shipped **180 releases** (`0.8.3`, 2025-06-23 → `1.5.0`,
-2026-10-24). The biggest rework is **`1.0.0` (2026-10-15): RQL replaces the data tools** — two
-`feat(rql)!` breaking commits turn the 73 fine-grained commands of the 0.9x line into 18
-(`rql-query` / `rql-mutate` / `rql-schema`), which is exactly why the shipped catalog has to be
-regenerated across that jump. Other large changes: `0.81.0` (the MCP server split out into the
-shared `GameDev-MCP-Server`, versioned separately from then on), `0.84.0` / `0.85.0` (auth rework:
-`ConnectionConfig.Token` migration, `cloudToken` removal), `1.1.0` (extensions released
-independently, now `2.0.x`), `1.3.0` (`script-execute` on Code-Exec, CLI editor sessions,
-McpPlugin 8.11.0 tool timeout), `1.5.0` (standalone CLI and App skills).
-
-`vendor/` caches the installable artifacts so a fresh Unity project can be installed without
-reaching GitHub (details in [vendor/README.md](vendor/README.md)): the plugin tarball
-`com.ivanmurzak.unity.mcp-1.5.0.tgz` (833,033 B) and `gamedev-mcp-server-win-x64-9.2.17.zip`
-(45,558,728 B, verified against the release `SHA256SUMS`). Lockstep is read, not guessed —
-`tools/offline-package.mjs` extracts `McpServerManager.ServerVersion` from the tarball (plugin
-`1.5.0` pins server `9.2.17`), and the CLI shares the plugin's number.
-
-```powershell
-# three-layer check: upstream latest / vendor cache / what the project has
-node "<plugin>\tools\offline-package.mjs" check --project <unity-project> --cli-version (unity-mcp-cli --version)
-
-# refresh: proxy first (GitHub release assets are the flaky leg), resumable, SHA256-verified
-$env:HTTPS_PROXY = 'http://127.0.0.1:7897'; $env:NODE_USE_ENV_PROXY = '1'
-node "<plugin>\tools\offline-package.mjs" fetch
-
-# install into a new Unity project from the local package
-node "<plugin>\tools\offline-package.mjs" install --project <unity-project>   # writes the file: dependency, backs up manifest
-unity-mcp-cli install-plugin <unity-project> --with-server --server-version 9.2.17 `
-  --server-source "<plugin>\vendor\gamedev-mcp-server-win-x64-9.2.17.zip"
-```
-
-`install-plugin` has **no** `--plugin-source`; the offline path is Unity's documented `file:`
-local-tarball dependency, and the CLI never overwrites a `file:` / `git+` / `http:` dependency
-spec (`nonSemverPrefixes` in `dist/utils/manifest.js`), so re-running `install-plugin` afterwards
-is safe.
-
-## Configuration
-
-Everything the stock client accepts (`serverName`, `transport`, `command`/`args`/`env`/`cwd`
-for stdio, `url`/`headers` for streamable-http, `toolCallTimeoutMs`, `failOnStartupError`,
-`reconnect.*`) works unchanged. On top of that:
-
-| Field | Default | Meaning |
-|---|---|---|
-| `autoStart` | **`false`** | Dormant by default: no connection and no bridged tools until a session opts in. Set `true` to connect at boot (the old always-on behaviour). |
-| `activateToolName` | `unity_mcp_activate` | Name of the always-registered activation hook. |
-| `restoreDeactivates` | `true` | `unity_tools_restore` also disconnects, returning the session to dormant. `false` keeps the connection alive. |
-| `skillModelInvocable` | **`false`** | The catalog skill is **not** offered to the model, so it never auto-loads and Unity capability never turns on by itself. |
-| `skillUserInvocable` | `true` | The skill is user-invocable: `/unity-mcp-tools` is the opt-in entry point. |
-| `resyncAfterTools` | `[]` | Raw MCP tool names whose **call completion** triggers a `tools/list` re-sync and registry swap. Set it to `['tool-set-enabled-state']` for the on-demand workflow. The trigger runs ~200 ms after the call returns, so the in-flight result finalizes first. |
-| `resyncIntervalMs` | `0` | Periodic re-sync (ms); `0` disables. Enabling it also picks up switches flipped by hand in the Unity window, at the cost of rebuilding the tool registrations every tick. |
-| `restoreToolName` | `unity_tools_restore` | Name of the native restore hook. |
-| `keepEnabledTools` | `[]` | Extra raw tool names the restore hook leaves enabled (on top of `tool-set-enabled-state`). |
-| `registerCatalogSkill` | `true` | Register the shipped catalog as a runtime skill. |
-| `skillName` | `unity-mcp-tools` | Skill name / slash command (`/unity-mcp-tools`). |
-| `registerHelperSkills` | `true` | Register the two shipped helper skills (`/unity-mcp-install`, `/unity-mcp-check`). |
-| `installSkillName` | `unity-mcp-install` | Name of the skill that installs the Unity-side plugin into the workspace's Unity project. |
-| `checkSkillName` | `unity-mcp-check` | Name of the skill that verifies the bridge reaches Unity and repairs the profile URL. |
-| `helperSkillsModelInvocable` | `true` | The helpers, unlike the catalog, are offered to the model so it can reach for them unprompted. |
-| `helperSkillsUserInvocable` | `true` | They are also user-invocable slash commands. |
-
-## Activation model (opt-in)
-
-The plugin is **dormant from boot**: it registers exactly two tiny hook tools and does not
-connect to Unity, so a session that never asks for Unity pays ~**895 characters (~224 tokens)**
-and nothing else.
-
-```
-boot ──► DORMANT ──(/unity-mcp-tools ─► unity_mcp_activate)──► ACTIVE ──(unity_tools_restore)──► DORMANT
-          2 hook tools                                          bridged mcp__unity__* tools
-```
-
-1. The user invokes **`/unity-mcp-tools`**. The skill is model-invisible (`skillModelInvocable:
-   false`), so this is the only way in; its body is injected as instructions.
-2. The model calls **`unity_mcp_activate`** → the bridge connects, and the Unity tools currently
-   enabled on the Unity side are registered (`mcp__unity__*`).
-3. Work proceeds with the on-demand enable/use workflow below.
-4. **`unity_tools_restore`** disables every Unity tool except `tool-set-enabled-state` **and
-   disconnects**, so the session is dormant again.
-
-## Workflow the model is told to follow
-
-The skill body states it, and the hook tools enforce the ends of it:
-
-0. **Activate** — `unity_mcp_activate` (the first step after `/unity-mcp-tools`).
-1. **Locate** — read the index, then the one `reference/<category>.md` that matters.
-2. **Enable** — `mcp__unity__tool-set-enabled-state` with the needed commands set to
-   `enabled: true`. Takes effect on the **next** step (the registry is rebuilt at request
-   boundaries), never in the same step.
-3. **Use** — call `mcp__unity__<command>` on the next step. Since plugin 1.2.0, reading and
-   changing scene content goes through RQL: `rql-schema` to learn a type, `rql-query` to read,
-   `rql-mutate` to write (`dry_run: true` previews; every mutate is all-or-nothing and undoable
-   with Ctrl+Z).
-4. **Restore** — call `unity_tools_restore` when the Unity work is done. It disables
-   everything except the management tool. Keep specific tools with
-   `unity_tools_restore({ "keep": ["rql-query"] })`.
-
-Every enabled command contributes its full JSON schema to **every subsequent model request**;
-disabled ones contribute nothing. Enabling is a temporary, reclaimable cost — forgetting step 4
-is what turns it permanent. The restore helper exists so step 4 never requires enumerating
-every registered name (the count itself is version-dependent: 73 commands on plugin 0.9x,
-18 on 1.2.0 — see the catalog's own header line).
-
-## Regenerating the catalog
-
-`tools/generate-unity-mcp-catalog.ps1` scans the installed
-`com.ivanmurzak.unity.mcp@*` package and rewrites `skills/SKILL.md` plus
-`skills/reference/*.md` (categories come from the plugin's own `[AiTool(Title = ...)]`
-attributes). Re-run it after a Unity plugin upgrade, then restart `dsh web`.
-
-Plugin 1.2.0 no longer writes tool descriptions as string literals — they are constant
-references such as `[Description(RqlGuide.QueryDescription)]`, and `RqlGuide` concatenates
-literals with other constants. The generator evaluates those constants, which is also how the
-RQL language manual lands in `reference/rql.md`: `-BodyTools` (default `rql-*`) picks which
-commands carry the plugin's own `[AiSkillBody]` text, so mechanical categories stay one-liners
-while the language tool carries its full guide. Keep the script saved as **UTF-8 with a BOM** —
-Windows PowerShell 5.1 reads BOM-less UTF-8 as ANSI and turns the Chinese text into parse errors.
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File tools/generate-unity-mcp-catalog.ps1 -ProjectRoot <your-unity-project>
-```
-
-## Uninstall / rollback
-
-```powershell
-dsh plugin --profile web remove dsh-unity-mcp-bridge
-```
-
-Then point the profile patch entry back at `@deepseek-ai/dsh-mcp-client` (or delete the row).
-No files outside this package are modified, so rollback is just the removal.
-
-## Provenance and license
-
-`lib/index.js` is derived from `@deepseek-ai/dsh-mcp-client` v0.1.5-rc.2
-(MIT, Copyright (c) 2026 DeepSeek — see `LICENSE`). The file header lists the exact
-modifications: plugin rename, `resyncAfterTools`/`resyncIntervalMs`, sync-completion
-reporting, the restore helper, and the runtime catalog skill. The MIT license permits this;
-the upstream copyright notice is retained.
-
-## Self-test
-
-`tools/selftest.mjs` drives the real plugin against a live Unity MCP server with a minimal
-fake host context — no DSH restart needed. It needs the package dependencies installed
-(`pnpm install` inside the package, or run it from a profile that already has them), and it
-reads the endpoint from `UNITY_MCP_URL`, so no project token is stored in the repository.
-
-```powershell
-$env:UNITY_MCP_URL = 'http://localhost:24009/p/<your-token>'   # your project's own endpoint
-node tools/selftest.mjs
-```
-
-It asserts, in order: the module exports; `Config` accepts every new field with
-upstream-compatible defaults; `apply()` connects and registers both the bridged tool and the
-native helper; the catalog skill registers with the right `resourceBase` and a body containing
-the workflow; **calling the bridged management tool makes the bridge re-sync on its own** (the
-newly enabled tool appears in the registry); and the restore helper disables everything outside
-its keep set. Observed output on the reference setup:
-
-```
-3) apply() 启动…
-   [info] unity-mcp-bridge: catalog skill "unity-mcp-tools" registered
-   桥接工具: mcp__unityprobe__tool-set-enabled-state
-   原生工具: unity_tools_restore
-   技能正文包含工作流与恢复指令: true
-4) 通过桥接工具开启 gameobject-find …
-   [info] unity-mcp-bridge(unityprobe): tool tool-set-enabled-state returned, re-syncing tool list
-   >>> 自动重同步是否生效: 是 ✓
-5) 调用恢复工具 keep=[unity-tool-list] …
-   返回: Disabled 1 Unity-MCP tool(s); kept enabled: tool-set-enabled-state, unity-tool-list.
-   恢复后桥接工具: mcp__unityprobe__tool-set-enabled-state
-```
-
-## Status
-
-- **Verified against a live Unity MCP server**: module load, `Config` defaults, `apply()`
-  registration (bridged tools + native helper), runtime skill registration with
-  `resourceBase`, self-driven re-sync after a management-tool call, and the restore helper's
-  disable-everything-except-keep behaviour. See `tools/selftest.mjs`.
-- **Not verified here**: installation via `dsh plugin --profile web add` and a full `dsh web`
-  boot with the plugin mounted — that needs a profile install and a DSH restart.
-
+Everything else — configuration fields, the offline `vendor/` package, catalog regeneration, self-test — is in [docs/DETAILS.md](docs/DETAILS.md); measured feature comparison in [FEATURES-AND-COMPARISON.md](FEATURES-AND-COMPARISON.md).
