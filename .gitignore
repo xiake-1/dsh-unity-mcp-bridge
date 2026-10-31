@@ -7,3 +7,7 @@ Thumbs.db
 _archive/
 _profile-backups/
 _verify/
+
+# vendor/ 离线包：tarball / SHA256SUMS / manifest.json 进 git，大二进制与续传中间态不进
+vendor/*.zip
+vendor/*.part
