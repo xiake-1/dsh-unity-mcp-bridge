@@ -102,6 +102,10 @@ if (Test-Path $cfgPath) { Remove-Item $cfgPath -Force }
 $serverDir = Join-Path $proj 'Library\mcp-server'
 if (Test-Path $serverDir) { Remove-Item $serverDir -Recurse -Force }
 
+# 新版 install 默认复制进工程的离线 tarball（UnityMcpOffline/，相对依赖用）
+$offlineDir = Join-Path $proj 'UnityMcpOffline'
+if (Test-Path $offlineDir) { Remove-Item $offlineDir -Recurse -Force }
+
 # 已解析的包缓存（Unity 下次打开也会自动清；编辑器已关闭时手动删更干净）
 Get-ChildItem (Join-Path $proj 'Library\PackageCache') -Directory -Filter 'com.ivanmurzak.unity.mcp*' -ErrorAction SilentlyContinue |
   ForEach-Object { Remove-Item $_.FullName -Recurse -Force }
@@ -130,7 +134,7 @@ Test-Path (Join-Path $proj 'Library\mcp-server')
 |---|---|
 | 定位到的工程 | `$proj` |
 | 已删除的包 | `com.ivanmurzak.unity.mcp` + 扩展列表（或「未安装，无需卸载」） |
-| 清理的配置/残留 | `UserSettings\AI-Game-Developer-Config.json`、`Library\mcp-server`、PackageCache 条目 |
+| 清理的配置/残留 | `UserSettings\AI-Game-Developer-Config.json`、`Library\mcp-server`、`UnityMcpOffline\`、PackageCache 条目 |
 | 备份 | `Packages\manifest.json.bak-<stamp>`、`AI-Game-Developer-Config.json.bak-<stamp>` |
 | 未动的 | DSH 桥接插件、CLI 托管 Server、其他工程、`.kilocode`/agent 配置 |
 | 下一步 | 用 Unity 打开工程让其重新解析；之后 `/unity-mcp-check` 应报告「未装」 |

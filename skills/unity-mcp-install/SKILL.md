@@ -165,28 +165,33 @@ ERROR: fetch failed
 
    这是**兜底而非首选**：绕过了官方 zip 的哈希校验，必须向用户说明来源与版本。
 
-### 5.2 离线本地包（插件自带 `vendor/`；给「新的 Unity 工程」用时优先走这条）
+### 5.2 离线本地包（插件自带 `vendor/`；现在默认写工程内相对路径）
 
 插件目录下的 `vendor/` 是一份离线包缓存：`vendor/README.md`（版本/大小/SHA256/来源）+ `vendor/manifest.json`（机器可读）。当前内容：插件 `com.ivanmurzak.unity.mcp@1.6.0`（960,306 B，SHA256 `13fd2579…c5178b`）与 Server `9.3.0` win-x64（44,088,479 B，SHA256 `53a79b42…e01dc2f`，已对官方 `SHA256SUMS` 校验通过）。
 
 ```powershell
-# 1) 把工程依赖指向本地 tarball（先 --dry-run 看 diff；正式跑会自动备份 manifest）
+# 1) 先看会复制什么、写什么依赖（不落盘）
+node "<bridge>\tools\offline-package.mjs" install --project $proj --dry-run
+
+# 2) 复制 tarball 到工程根并写相对依赖（自动备份 manifest）
 node "<bridge>\tools\offline-package.mjs" install --project $proj
 
-# 2) Server 也从 vendor 的 zip 装进 CLI 托管目录（不联网）
+# 3) Server 从 vendor 的 zip 装进 CLI 托管目录（不联网）
 unity-mcp-cli install-plugin $proj --with-server --server-version 9.3.0 `
   --server-source "<bridge>\vendor\gamedev-mcp-server-win-x64-9.3.0.zip"
 ```
 
 要点（都实测过）：
 
-- `install-plugin` **没有** `--plugin-source`。离线靠的是 Unity 官方支持的本地 tarball 依赖：`"com.ivanmurzak.unity.mcp": "file:D:/…/vendor/com.ivanmurzak.unity.mcp-1.6.0.tgz"`（Unity 手册 *Local folder or tarball paths*：`file:` 允许绝对路径，Windows 用正斜杠）。
-- 之后再跑 `unity-mcp-cli install-plugin` **不会**把它改回版本号：CLI 的 `shouldUpdateVersion` 对 `file:` / `git+` / `http:` 开头的依赖直接跳过（`dist/utils/manifest.js` 的 `nonSemverPrefixes`）。实测那行保持 `file:` 不变。
+- **默认 `--vendor project`**：把 tarball 复制到 `<工程>\UnityMcpOffline\`，manifest 写成 `"com.ivanmurzak.unity.mcp": "file:../UnityMcpOffline/com.ivanmurzak.unity.mcp-1.6.0.tgz"`。Unity 的 `file:` 相对路径**相对 `Packages` 文件夹**解析（[Unity 手册](https://docs.unity3d.com/2022.3/Documentation/Manual/upm-localpath.html)），所以 `../UnityMcpOffline/…` 就是工程根下的目录。这样 **profile 重建/删除、工程拷到别的机器都不会断**；tarball 约 1 MB，可以一起提交到版本库。
+- 旧工程（依赖指向 `node_modules\...\vendor\` 绝对路径）**重跑一次 `install` 就会迁移**到工程内相对路径；manifest 先备份。想保留旧行为用 `--vendor bridge`（绝对路径，profile 重建后需要重跑 install）。
+- `install` 检测工程内 tarball 的 SHA256；已存在且一致就跳过复制，不一致（换了插件版本）会覆盖。
+- `install-plugin` **没有** `--plugin-source`。离线靠的就是上面的本地 tarball 依赖；之后重跑 `unity-mcp-cli install-plugin` **不会**把它改回版本号（`dist/utils/manifest.js` 的 `nonSemverPrefixes` 跳过 `file:` / `git+` / `http:`）。
 - 目标版本从哪来：`vendor/manifest.json` 的 `plugin.pinnedServerVersion` —— 脚本从 tarball 里的 `Editor/Scripts/McpServerManager.cs` 读 `ServerVersion` 常量（1.6.0 钉住 **9.3.0**）。别拿「Server 上游最新」当目标。
 - 完全离线还剩一个小尾巴：插件的传递依赖 `extensions.unity.playerprefsex` 要 Unity 的 Package Manager 从 OpenUPM 解析（实测 OpenUPM 直连可达）。彻底断网的机器要么预先让 Unity 解析过一次，要么接受首次解析需要联网。
-- `file:` 依赖**不会自动升级**：升级 = 重新 `fetch` 刷新本地离线包 + 重新 `install` 进工程（见 `/unity-mcp-update` 的 4.2 / 4.3），换版本后照例重生成命令目录。
+- `file:` 依赖**不会自动升级**：升级 = 重新 `fetch` 刷新插件目录的离线包 + 重新 `install` 进工程（见 `/unity-mcp-update` 的 4.2 / 4.3），换版本后照例重生成命令目录。
 - 换平台：`node "<bridge>\tools\offline-package.mjs" fetch --rid osx-arm64` 先补对应 zip，再 `--server-source` 指过去。
-- **profile 里的安装副本常常缺 zip**：40 MB 级二进制不进 git/npm，`dsh plugin add file:…` 装出来的 `node_modules\dsh-unity-mcp-bridge\vendor\` 通常只有 tarball + manifest。`install` 会明确告诉你缺不缺；缺就先 `fetch`（代理优先）补齐再跑 `--server-source`，不要拿旧版本的 zip 顶。
+- **profile 里的安装副本常常缺 zip**：40 MB 级二进制不进 git/npm，`dsh plugin add …` 装出来的 `node_modules\dsh-unity-mcp-bridge\vendor\` 通常只有 tarball + manifest。`install` 会明确告诉你缺不缺；缺就先 `fetch`（代理优先）补齐再跑 `--server-source`，不要拿旧版本的 zip 顶。
 
 ## 6. 验证与下一步
 

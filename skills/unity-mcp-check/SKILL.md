@@ -36,11 +36,21 @@ $projects
 $manifest = Join-Path $proj 'Packages\manifest.json'
 Select-String -Path $manifest -Pattern 'com\.ivanmurzak\.unity\.mcp'
 Get-ChildItem (Join-Path $proj 'Library\PackageCache') -Directory -Filter 'com.ivanmurzak.unity.mcp@*' -ErrorAction SilentlyContinue
+
+# 若依赖是 file:，解析目标是否存在（Unity 相对 Packages 目录；绝对路径直接用）
+$dep = (Get-Content $manifest -Raw | ConvertFrom-Json).dependencies.'com.ivanmurzak.unity.mcp'
+if ($dep -like 'file:*') {
+  $rel = $dep.Substring(5)
+  $target = if ($rel -match '^[A-Za-z]:' -or $rel.StartsWith('/')) { $rel } else { Join-Path (Split-Path $manifest) $rel }
+  "dep target: $target  exists=$(Test-Path $target)  points-into-node_modules=$($target -like '*node_modules*')"
+}
 ```
 
 - manifest 依赖 **和** `Library\PackageCache` 里都有 → 已装（依赖可能是 `file:` 本地包，属正常）。
 - 只有 manifest、没有 `PackageCache` → Unity 还没解析包：让 Unity 打开/重新加载项目一次再看。
 - 两处都没有 → **未装**：报告后交给 `/unity-mcp-install`，不要在这里装。
+- `file:` 目标 **不存在** → Unity 解析必失败：重跑 `/unity-mcp-install`（现在默认 `--vendor project`，会复制 tarball 到工程 `UnityMcpOffline/` 并写相对路径）。
+- `file:` 目标指向 **`node_modules`**（例如旧版写进 profile 的绝对路径）→ 现在能用，但 profile 重建/重装即失效：建议重跑 `/unity-mcp-install` 迁移到工程内相对路径。
 
 ## 2. 端口是不是 20000、模式是不是 Custom（不对就改）
 
@@ -229,6 +239,8 @@ unity-mcp-cli wait-for-ready $proj         # 最长 120s
 | 改了 host / 模式但服务器没起 | 插件静态构造只在域重载时读 `connectionMode`，只改 JSON 不生效 | 同上，重启编辑器后再看 `Start listening on port 20000` |
 | 全新工程的可见工具是 8 个（默认 7 + 开关） | `tools: []` 时 `--disable-all-tools` 是空操作（CLI 1.6.0 只改已有条目） | 按第 4 步用 `--disable-tools <显式名单>` 物化条目，再 `--enable-tools tool-set-enabled-state` |
 | manifest 里有包但连不上 | Unity 还没解析包 | 用 Unity 打开项目一次 |
+| `file:` 依赖找不到目标 | tarball 被删/工程从别的机器拷来但没带 `UnityMcpOffline/`，或旧版指向了已重建的 profile 路径 | 重跑 `/unity-mcp-install`（默认 `--vendor project`，复制 tarball 到工程并写相对路径） |
+| `file:` 路径里含 `node_modules` | 旧版 `install` 写的是插件目录绝对路径，生命周期绑在 profile 上 | 能连就先不动；建议重跑 `/unity-mcp-install` 迁移到 `UnityMcpOffline/` 相对路径 |
 | 404 / 405 | 端点路径不对（`/mcp` ↔ `/p/<token>`） | 以 `http://localhost:20000/mcp` 为准；需要 token 路径时再补 |
 | 401 / 403 | token 缺失或过期 | 用项目配置里的 token；或 `bootstrap-local --url ... --token ...` 重新固定 |
 | 工具全被隐藏（含 `tool-set-enabled-state`） | 被 `--disable-all-tools` 或历史上写死的配置隐藏 | 单独跑一条 `unity-mcp-cli configure $proj --enable-tools tool-set-enabled-state` 救回 |

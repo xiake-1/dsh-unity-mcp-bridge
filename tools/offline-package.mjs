@@ -5,7 +5,7 @@
  * 三个子命令：
  *   check    比对「上游最新 / 本地 vendor 离线包 / 项目已装」三层版本，给出该不该更新
  *   fetch    下载插件 tarball + GameDev-MCP-Server zip 到 vendor/，校验 SHA256，写 vendor/manifest.json
- *   install  把一个 Unity 工程的 Packages/manifest.json 指向 vendor/ 里的本地 tarball（file: 依赖）
+ *   install  把 tarball 复制到 <工程>/UnityMcpOffline/ 并写相对 Packages 的 file: 依赖（--vendor bridge 则写插件目录绝对路径）
  *
  * 网络策略（实测）：
  *   - OpenUPM / npm registry 直连可达 → 插件 tarball 与版本查询优先直连，失败再走代理。
@@ -38,7 +38,7 @@ function parseArgs(argv) {
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--no-proxy') { out.noProxy = true; continue; }
-    const flag = ['proxy', 'project', 'plugin-version', 'server-version', 'rid', 'cli-version', 'out'].find(f => a === `--${f}`);
+    const flag = ['proxy', 'project', 'plugin-version', 'server-version', 'rid', 'cli-version', 'out', 'vendor'].find(f => a === `--${f}`);
     if (flag) { out[flag] = argv[++i]; continue; }
     if (a === '--json') { out.json = true; continue; }
     if (a === '--force') { out.force = true; continue; }
@@ -53,7 +53,10 @@ function usage() {
   console.log(`用法:
   node tools/offline-package.mjs check   [--project <Unity工程>] [--cli-version <v>] [--json]
   node tools/offline-package.mjs fetch   [--plugin-version <v>] [--server-version <v>] [--rid <rid>] [--proxy <url>] [--force]
-  node tools/offline-package.mjs install [--project <Unity工程>] [--dry-run]
+  node tools/offline-package.mjs install [--project <Unity工程>] [--vendor project|bridge] [--dry-run]
+
+--vendor project（默认）把 tarball 复制到 <工程>/UnityMcpOffline/ 并写相对路径（可移植）；
+--vendor bridge 沿用旧行为，写 <插件目录>/vendor/ 的绝对 file: 路径。
 
 vendor/ 目录: ${VENDOR_DIR}`);
   process.exit(0);
@@ -394,20 +397,40 @@ function cmdInstall(args) {
   const actual = sha256(tgz);
   if (vendor.plugin.sha256 && actual !== vendor.plugin.sha256) fail(`离线包 sha256 与 manifest 不符: ${actual}`);
 
+  const mode = args.vendor ?? 'project';
+  if (mode !== 'project' && mode !== 'bridge') fail(`--vendor 只能是 project 或 bridge（收到 ${mode}）`);
+
   const proj = args.project || fail('需要 --project <Unity工程>');
   const manifestPath = path.join(proj, 'Packages', 'manifest.json');
   if (!fs.existsSync(path.join(proj, 'ProjectSettings', 'ProjectVersion.txt'))) fail(`不是 Unity 工程: ${proj}`);
   if (!fs.existsSync(manifestPath)) fail(`缺 ${manifestPath}`);
 
-  // Unity 的 file: 依赖用正斜杠；绝对路径直接跟在 file: 后面（Unity 手册：Local folder or tarball paths）
-  const spec = `file:${tgz.replace(/\\/g, '/')}`;
+  // 默认把 tarball 复制进工程，依赖写相对 Packages 的路径（Unity 手册：本地 tarball 路径相对 Packages 文件夹）。
+  // 这样 profile 重建、工程换机器都不会断；--vendor bridge 保留旧的绝对路径行为。
+  const offlineDir = path.join(proj, 'UnityMcpOffline');
+  const offlineTgz = path.join(offlineDir, path.basename(tgz));
+  const spec = mode === 'project'
+    ? `file:../UnityMcpOffline/${path.basename(tgz)}`
+    : `file:${tgz.replace(/\\/g, '/')}`;
+
   const mj = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
   mj.dependencies ??= {};
   const before = mj.dependencies[PKG_ID] ?? null;
   if (args.dryRun) {
-    console.log(`dry-run: ${PKG_ID}: ${before ?? '（无）'} → ${spec}`);
+    console.log(`dry-run (--vendor ${mode}): ${PKG_ID}: ${before ?? '（无）'} → ${spec}`);
+    if (mode === 'project') console.log(`  复制: ${tgz} → ${offlineTgz}`);
     return;
   }
+
+  if (mode === 'project') {
+    fs.mkdirSync(offlineDir, { recursive: true });
+    const same = fs.existsSync(offlineTgz) && sha256(offlineTgz) === vendor.plugin.sha256;
+    if (!same) fs.copyFileSync(tgz, offlineTgz);
+    const copied = sha256(offlineTgz);
+    if (vendor.plugin.sha256 && copied !== vendor.plugin.sha256) fail(`工程内离线包 sha256 与 manifest 不符: ${copied}`);
+    console.log(`已复制离线包到工程: ${offlineTgz}${same ? '（已存在且哈希一致，跳过复制）' : ''}`);
+  }
+
   // 与 unity-mcp-cli 一致：补 OpenUPM 作用域注册表（插件的传递依赖 extensions.unity.* 要它）
   mj.scopedRegistries ??= [];
   let reg = mj.scopedRegistries.find(r => r.name === 'package.openupm.com');
@@ -423,11 +446,17 @@ function cmdInstall(args) {
   console.log(`  ${PKG_ID}: ${before ?? '（无）'} → ${spec}`);
   console.log(`  备份: ${bak}`);
   console.log(`  插件版本 ${vendor.plugin.version}（钉住 Server ${vendor.plugin.pinnedServerVersion}）`);
+  if (mode === 'project') {
+    console.log('  提示: 依赖是相对 Packages 的路径；profile 重建/删除不会断，工程拷到别的机器也能离线解析。');
+    console.log('        tarball 在工程根 UnityMcpOffline/ 下（约 1 MB），可一起提交到版本库。');
+  } else {
+    console.log('  提示: 依赖是插件目录的绝对路径；重建 profile / 移动工程后会失效，需要重跑 install。');
+  }
   const serverZip = vendor.server?.file ? path.join(VENDOR_DIR, vendor.server.file) : null;
   if (serverZip && fs.existsSync(serverZip)) {
     console.log(`下一步：unity-mcp-cli install-plugin ${proj} --with-server --server-version ${vendor.server.version} --server-source "${serverZip}"`);
   } else {
-    console.log(`⚠ 本地缺 Server zip（${vendor.server?.file ?? '未记录'}；43 MB 级二进制不进 git/npm）。先补齐再装：`);
+    console.log(`⚠ 本地缺 Server zip（${vendor.server?.file ?? '未记录'}；40 MB 级二进制不进 git/npm）。先补齐再装：`);
     console.log(`  node tools/offline-package.mjs fetch --rid ${vendor.server?.rid ?? defaultRid()}   # 代理优先`);
   }
 }

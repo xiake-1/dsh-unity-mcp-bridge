@@ -113,7 +113,7 @@ unity-mcp-cli install-plugin <unity-project> --with-server --server-version 9.3.
   --server-source "<plugin>\vendor\gamedev-mcp-server-win-x64-9.3.0.zip"
 ```
 
-`install-plugin` **没有** `--plugin-source`；离线路径是 Unity 官方支持的 `file:` 本地 tarball 依赖。CLI 不会覆盖 `file:` / `git+` / `http:` 依赖（`dist/utils/manifest.js` 的 `nonSemverPrefixes`），所以之后重跑 `install-plugin` 也安全。
+`install-plugin` **没有** `--plugin-source`；离线路径是 Unity 官方支持的 `file:` 本地 tarball 依赖。`offline-package.mjs install` 默认（`--vendor project`）把 tarball 复制到工程根 `UnityMcpOffline/`，写相对 `Packages` 的依赖（`file:../UnityMcpOffline/…`，profile 重建/换机器都不断）；`--vendor bridge` 保留旧的插件目录绝对路径。CLI 不会覆盖 `file:` / `git+` / `http:` 依赖（`dist/utils/manifest.js` 的 `nonSemverPrefixes`），所以之后重跑 `install-plugin` 也安全。
 
 ---
 

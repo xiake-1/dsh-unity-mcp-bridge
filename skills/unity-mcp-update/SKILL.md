@@ -139,7 +139,7 @@ node "<bridge>\tools\offline-package.mjs" fetch --plugin-version <latest>
 # 先看会改什么，不落盘
 node "<bridge>\tools\offline-package.mjs" install --project $proj --dry-run
 
-# 落盘（自动备份 Packages\manifest.json，写官方支持的 file: 本地依赖）
+# 落盘（自动备份 Packages\manifest.json；默认把 tarball 复制到工程 UnityMcpOffline/ 并写相对依赖）
 node "<bridge>\tools\offline-package.mjs" install --project $proj
 
 # Server 从 vendor 的 zip 装进 CLI 托管目录（不联网）

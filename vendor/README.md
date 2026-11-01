@@ -33,11 +33,11 @@ node "<插件目录>\tools\offline-package.mjs" fetch
 ## 离线装进 Unity 工程
 
 ```powershell
-node "<插件目录>\tools\offline-package.mjs" install --project <Unity工程>   # 写 file: 依赖 + 备份 manifest
+node "<插件目录>\tools\offline-package.mjs" install --project <Unity工程>   # 复制 tarball 到工程 UnityMcpOffline/ + 写相对依赖 + 备份 manifest
 unity-mcp-cli install-plugin <Unity工程> --with-server --server-version 9.3.0 --server-source "<插件目录>\vendor\gamedev-mcp-server-win-x64-9.3.0.zip"
 ```
 
-`install` 写的是 Unity 官方支持的本地 tarball 依赖（`"com.ivanmurzak.unity.mcp": "file:D:/…/vendor/com.ivanmurzak.unity.mcp-1.6.0.tgz"`，见 Unity 手册 *Local folder or tarball paths*）。`unity-mcp-cli` **没有** `--plugin-source`，但它对 `file:` 这类非 semver 依赖**不会覆盖**（`dist/utils/manifest.js` 的 `nonSemverPrefixes`），所以两条命令可以并存。
+`install` 默认（`--vendor project`）把 tarball 复制到工程根的 `UnityMcpOffline/`，并写成相对 `Packages` 的依赖 `"com.ivanmurzak.unity.mcp": "file:../UnityMcpOffline/com.ivanmurzak.unity.mcp-1.6.0.tgz"`（见 Unity 手册 *Local folder or tarball paths*）。这样 profile 重建、工程换机器都不会断；旧行为用 `--vendor bridge` 写插件目录的绝对路径。`unity-mcp-cli` **没有** `--plugin-source`，但它对 `file:` 这类非 semver 依赖**不会覆盖**（`dist/utils/manifest.js` 的 `nonSemverPrefixes`），所以两条命令可以并存。
 
 ## 进 git 的边界
 
