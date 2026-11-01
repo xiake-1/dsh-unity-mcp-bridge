@@ -9,7 +9,7 @@ English → [README.md](README.md)
 - 开机即休眠：不连接、不注册任何 Unity 工具，只有 2 个钩子工具（约 224 tokens）。
 - `/unity-mcp-tools` → `unity_mcp_activate` 才连接并注册 `mcp__unity__*`。
 - 开启的命令**下一步**才生效；`unity_tools_restore` 关闭它们并断开，回到休眠。
-- 随包发布插件 1.2.0 的命令目录（18 个命令，RQL-first）与 `/unity-mcp-install`、`/unity-mcp-check` 两个技能。
+- 随包发布插件 1.6.0 的命令目录（19 个命令，RQL-first；`/unity-mcp-update-tools` 可按新离线包重生成）与 `/unity-mcp-install`、`/unity-mcp-check`、`/unity-mcp-update`、`/unity-mcp-update-tools` 四个技能。
 - `resyncAfterTools`：管理工具调用返回后桥接自己重拉 `tools/list`，不依赖 DSH 长会话收不到的 `list_changed` 通知。
 
 ## 安装
@@ -35,7 +35,9 @@ dsh plugin --profile <profile> add git+https://github.com/xiake-1/dsh-unity-mcp-
 | 入口 | 作用 |
 |---|---|
 | `/unity-mcp-install` | 给工作区里的 Unity 工程装上 Unity 侧插件与 MCP Server |
-| `/unity-mcp-check` | 两端统一到 20000 端口、配好 AI agent、初始化最小工具集、比对版本 |
+| `/unity-mcp-check` | 检查插件安装、端口 20000（不是就改）、DSH bundle 加载、工具集初始化、命令目录版本，再实测连通 |
+| `/unity-mcp-update` | 检查 CLI、本地离线包（`vendor/`）与 Unity 插件的新版本，问过你才更新 |
+| `/unity-mcp-update-tools` | 把离线包刷到最新并重生成 `/unity-mcp-tools` 的命令索引与扩展索引 |
 | `/unity-mcp-tools` | 打开 Unity 能力：激活 → 找到命令 → 只开本次要用的 |
 | `unity_tools_restore` | 关闭除管理工具外的全部工具并断开，回到休眠 |
 

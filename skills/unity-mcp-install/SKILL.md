@@ -27,7 +27,7 @@ if ($cli) { unity-mcp-cli --version } else { 'NOT INSTALLED' }
 - 打印 `NOT INSTALLED` → 走第 2 步。
 - 命令在但执行报错，或怀疑「装了但不在 PATH」：`npm ls -g unity-mcp-cli`（全局 bin 目录一般是 `%APPDATA%\npm`）。
 
-**版本对齐（必查，别只看「能不能跑」）**：CLI、Unity 插件、MCP Server 三者版本是 lockstep 的 —— 实测 `unity-mcp-cli 1.2.0` ↔ 插件 `com.ivanmurzak.unity.mcp@1.2.0` ↔ Server `9.2.11`（CLI 的 `dist/utils/server-version.js` 里 `DEFAULT_SERVER_VERSION` 就是插件 `McpServerManager.ServerVersion` 的镜像）。**插件钉住哪个 Server，以插件源码为准，不要猜**：1.5.0 的 tarball 里 `Editor/Scripts/McpServerManager.cs` 写死 `public const string ServerVersion = "9.2.17"`。升到 CLI 1.5.0 后实测两边同步了：`DEFAULT_SERVER_VERSION` 也是 **9.2.17**；而 `install-plugin` 到 1.5.0 **仍然没有** `--plugin-source`（离线只能走 5.2 的 `file:` 依赖）。一条命令把三层（上游最新 / 本地离线包 / 项目已装）全查出来：
+**版本对齐（必查，别只看「能不能跑」）**：CLI、Unity 插件、MCP Server 三者版本是 lockstep 的 —— 实测 `unity-mcp-cli 1.2.0` ↔ 插件 `com.ivanmurzak.unity.mcp@1.2.0` ↔ Server `9.2.11`（CLI 的 `dist/utils/server-version.js` 里 `DEFAULT_SERVER_VERSION` 就是插件 `McpServerManager.ServerVersion` 的镜像）。**插件钉住哪个 Server，以插件源码为准，不要猜**：1.5.0 的 tarball 里 `Editor/Scripts/McpServerManager.cs` 写死 `public const string ServerVersion = "9.2.17"`。升到 CLI 1.5.0 后实测两边同步了：`DEFAULT_SERVER_VERSION` 也是 **9.2.17**；而 `install-plugin` 到 1.5.0 **仍然没有** `--plugin-source`（离线只能走 5.2 的 `file:` 依赖）。一条命令把四层（上游最新 / 本地离线包 / 项目已装 / 本机 CLI）全查出来（只为安装时对齐版本；单独查更新/升级用 `/unity-mcp-update`）：
 
 ```powershell
 # <bridge> = 插件目录：源码目录，或已安装副本 %DSH_PROFILE_DIR%\node_modules\dsh-unity-mcp-bridge
@@ -35,7 +35,7 @@ $env:HTTPS_PROXY = 'http://127.0.0.1:7897'; $env:NODE_USE_ENV_PROXY = '1'   # �
 node "<bridge>\tools\offline-package.mjs" check --cli-version (unity-mcp-cli --version)
 ```
 
-老 CLI 的 **AI agent 列表会缺项**：实测 0.91.0、1.2.0 与 1.5.0 的 `setup-mcp --list` 都只有 14 个 agent，**不含 `kilo-code`**；而 Server 自己的 `configure --help` 有 16 个（含 `kilo-code`、`zoo-code`、`other-custom`）。所以 `/unity-mcp-check` 要配 Kilo Code 时，CLI 再新也用不了 `setup-mcp`，必须 `configure --agent`。
+老 CLI 的 **AI agent 列表会缺项**：实测 0.91.0、1.2.0 与 1.5.0 的 `setup-mcp --list` 都只有 14 个 agent，**不含 `kilo-code`**；而 Server 自己的 `configure --help` 有 16 个（含 `kilo-code`、`zoo-code`、`other-custom`）。所以要把 AI agent 配成 Kilo Code 时，CLI 再新也用不了 `setup-mcp`，必须 `configure --agent`。
 
 ```powershell
 npm view unity-mcp-cli version          # registry 上的最新版
@@ -91,12 +91,12 @@ Get-ChildItem (Join-Path $proj 'Library\PackageCache') -Directory -Filter 'com.i
 unity-mcp-cli install-plugin $proj --with-server
 ```
 
-**默认就带 `--with-server`**：它把与本机 RID 匹配的 `GameDev-MCP-Server` 二进制装进 CLI 的**托管目录** `~\.ai-game-dev\server\<rid>\`（含 `version` 标记文件）。`/unity-mcp-check` 里的 `configure --agent <id>` 是靠这个二进制跑起来的（`proxyConfigure` 直接执行 `<托管 exe> configure --agent <id> [--url …]`，cwd = 项目根），缺它就只能退回项目自带的 `Library\mcp-server\<rid>\gamedev-mcp-server.exe`。
+**默认就带 `--with-server`**：它把与本机 RID 匹配的 `GameDev-MCP-Server` 二进制装进 CLI 的**托管目录** `~\.ai-game-dev\server\<rid>\`（含 `version` 标记文件）。`configure --agent <id>`（给 Unity 里选中的 AI agent 写客户端配置，如 Kilo Code 的 `.kilocode/mcp.json`）就是靠这个二进制跑起来的（`proxyConfigure` 直接执行 `<托管 exe> configure --agent <id> [--url …]`，cwd = 项目根），缺它就只能退回项目自带的 `Library\mcp-server\<rid>\gamedev-mcp-server.exe`。
 
 | 开关 | 用途 |
 |---|---|
-| `--with-server` | 同时下载 GameDev-MCP-Server 二进制（CLI 1.5.0 默认 **9.2.17**，与插件 `McpServerManager.ServerVersion` 同步；1.2.0 时代是 9.2.11） |
-| `--server-version <version>` | 指定要下载的 Server 版本（CLI 1.5.0 默认 9.2.17） |
+| `--with-server` | 同时下载 GameDev-MCP-Server 二进制（CLI 1.6.0 默认 **9.3.0**，与插件 `McpServerManager.ServerVersion` 同步；1.2.0 时代是 9.2.11） |
+| `--server-version <version>` | 指定要下载的 Server 版本（CLI 1.6.0 默认 9.3.0） |
 | `--server-source <path-or-url>` | 离线兜底：从本地 zip 或 URL 装 Server（**跳过 SHA256SUMS 校验**，自己核对哈希） |
 | `--plugin-version <version>` | 指定插件版本（默认 latest；离线/代理场景下显式指定可省掉一次 OpenUPM 解析） |
 | `--enroll <code>` / `--enroll-stdin` | 兑换云端 enrollment code（用自建本地端点时不需要） |
@@ -167,26 +167,26 @@ ERROR: fetch failed
 
 ### 5.2 离线本地包（插件自带 `vendor/`；给「新的 Unity 工程」用时优先走这条）
 
-插件目录下的 `vendor/` 是一份离线包缓存：`vendor/README.md`（版本/大小/SHA256/来源）+ `vendor/manifest.json`（机器可读）。当前内容：插件 `com.ivanmurzak.unity.mcp@1.5.0`（833,033 B，SHA256 `7f32ec8e…417506`）与 Server `9.2.17` win-x64（45,558,728 B，SHA256 `cb48cae2…353a0f`，已对官方 `SHA256SUMS` 校验通过）。
+插件目录下的 `vendor/` 是一份离线包缓存：`vendor/README.md`（版本/大小/SHA256/来源）+ `vendor/manifest.json`（机器可读）。当前内容：插件 `com.ivanmurzak.unity.mcp@1.6.0`（960,306 B，SHA256 `13fd2579…c5178b`）与 Server `9.3.0` win-x64（44,088,479 B，SHA256 `53a79b42…e01dc2f`，已对官方 `SHA256SUMS` 校验通过）。
 
 ```powershell
 # 1) 把工程依赖指向本地 tarball（先 --dry-run 看 diff；正式跑会自动备份 manifest）
 node "<bridge>\tools\offline-package.mjs" install --project $proj
 
 # 2) Server 也从 vendor 的 zip 装进 CLI 托管目录（不联网）
-unity-mcp-cli install-plugin $proj --with-server --server-version 9.2.17 `
-  --server-source "<bridge>\vendor\gamedev-mcp-server-win-x64-9.2.17.zip"
+unity-mcp-cli install-plugin $proj --with-server --server-version 9.3.0 `
+  --server-source "<bridge>\vendor\gamedev-mcp-server-win-x64-9.3.0.zip"
 ```
 
 要点（都实测过）：
 
-- `install-plugin` **没有** `--plugin-source`。离线靠的是 Unity 官方支持的本地 tarball 依赖：`"com.ivanmurzak.unity.mcp": "file:D:/…/vendor/com.ivanmurzak.unity.mcp-1.5.0.tgz"`（Unity 手册 *Local folder or tarball paths*：`file:` 允许绝对路径，Windows 用正斜杠）。
+- `install-plugin` **没有** `--plugin-source`。离线靠的是 Unity 官方支持的本地 tarball 依赖：`"com.ivanmurzak.unity.mcp": "file:D:/…/vendor/com.ivanmurzak.unity.mcp-1.6.0.tgz"`（Unity 手册 *Local folder or tarball paths*：`file:` 允许绝对路径，Windows 用正斜杠）。
 - 之后再跑 `unity-mcp-cli install-plugin` **不会**把它改回版本号：CLI 的 `shouldUpdateVersion` 对 `file:` / `git+` / `http:` 开头的依赖直接跳过（`dist/utils/manifest.js` 的 `nonSemverPrefixes`）。实测那行保持 `file:` 不变。
-- 目标版本从哪来：`vendor/manifest.json` 的 `plugin.pinnedServerVersion` —— 脚本从 tarball 里的 `Editor/Scripts/McpServerManager.cs` 读 `ServerVersion` 常量（1.5.0 钉住 **9.2.17**）。别拿「Server 上游最新」当目标。
-- 完全离线还剩一个小尾巴：插件的传递依赖 `extensions.unity.playerprefsex@2.1.5` 要 Unity 的 Package Manager 从 OpenUPM 解析（实测 OpenUPM 直连可达）。彻底断网的机器要么预先让 Unity 解析过一次，要么接受首次解析需要联网。
-- `file:` 依赖**不会自动升级**：升级 = 重新 `fetch` + 重新 `install`（见 `/unity-mcp-check` 的更新检查），换版本后照例重生成命令目录。
+- 目标版本从哪来：`vendor/manifest.json` 的 `plugin.pinnedServerVersion` —— 脚本从 tarball 里的 `Editor/Scripts/McpServerManager.cs` 读 `ServerVersion` 常量（1.6.0 钉住 **9.3.0**）。别拿「Server 上游最新」当目标。
+- 完全离线还剩一个小尾巴：插件的传递依赖 `extensions.unity.playerprefsex` 要 Unity 的 Package Manager 从 OpenUPM 解析（实测 OpenUPM 直连可达）。彻底断网的机器要么预先让 Unity 解析过一次，要么接受首次解析需要联网。
+- `file:` 依赖**不会自动升级**：升级 = 重新 `fetch` 刷新本地离线包 + 重新 `install` 进工程（见 `/unity-mcp-update` 的 4.2 / 4.3），换版本后照例重生成命令目录。
 - 换平台：`node "<bridge>\tools\offline-package.mjs" fetch --rid osx-arm64` 先补对应 zip，再 `--server-source` 指过去。
-- **profile 里的安装副本常常缺 zip**：43 MB 级二进制不进 git/npm，`dsh plugin add file:…` 装出来的 `node_modules\dsh-unity-mcp-bridge\vendor\` 通常只有 tarball + manifest。`install` 会明确告诉你缺不缺；缺就先 `fetch`（代理优先）补齐再跑 `--server-source`，不要拿旧版本的 zip 顶。
+- **profile 里的安装副本常常缺 zip**：40 MB 级二进制不进 git/npm，`dsh plugin add file:…` 装出来的 `node_modules\dsh-unity-mcp-bridge\vendor\` 通常只有 tarball + manifest。`install` 会明确告诉你缺不缺；缺就先 `fetch`（代理优先）补齐再跑 `--server-source`，不要拿旧版本的 zip 顶。
 
 ## 6. 验证与下一步
 
@@ -206,12 +206,12 @@ Push-Location $proj; & "$env:USERPROFILE\.ai-game-dev\server\win-x64\gamedev-mcp
 
 1. 用 Unity 打开该项目（`unity-mcp-cli open $proj`）—— 包在编辑器里解析，`Library/PackageCache/` 才会出现。
 2. 在 Unity 里打开 **Window → AI Game Developer**，确认连接方式（自建本地端点选 Custom，或走 Cloud），并把顶部的 **AI agent** 选成要用的那个（如 **Kilo Code**）—— Skills 的自动生成只认这个下拉框，CLI 的 `setup-skills` 不支持 `kilo-code`。
-3. 回到 DSH 跑 `/unity-mcp-check`：它会把两端端口统一到 **20000**、把 AI agent 配成 **Kilo Code**（写 `.kilocode\mcp.json`）、把 Unity 工具集初始化成只留 `tool-set-enabled-state`、比对「上游 / `vendor/` / 项目」三层版本，再实测连通性。
-4. **本次装了或升级了插件版本 → 必须重生成桥接自带的命令目录**，否则 `/unity-mcp-tools` 会教模型去开不存在的命令。命令名随插件版本变（实测 0.9x = 73 个；1.2.0 = 18 个；**分水岭是 1.0.0「RQL replaces the data tools」**，`assets-*` / `gameobject-*` / `scene-*` / `profiler-*` 等已被 `rql-query` / `rql-mutate` / `rql-schema` 取代）：
+3. 回到 DSH 跑 `/unity-mcp-check`：它会检查插件是否装上、端口是否 **20000**、DSH 是否加载了插件行、工具集是否只剩 `tool-set-enabled-state`、命令目录是否与插件版本一致，最后实测连通。要查版本或升级用 `/unity-mcp-update`（检查后先问用户，同意才更新）。
+4. **本次装了或升级了插件版本 → 必须重生成桥接自带的命令目录**，否则 `/unity-mcp-tools` 会教模型去开不存在的命令（顺带刷新 `reference/extensions.md` 的可选扩展清单；也可以直接跑 `/unity-mcp-update-tools`）。命令名随插件版本变（实测 0.9x = 73 个；1.2.0 = 18 个；**分水岭是 1.0.0「RQL replaces the data tools」**，`assets-*` / `gameobject-*` / `scene-*` / `profiler-*` 等已被 `rql-query` / `rql-mutate` / `rql-schema` 取代）：
 
    ```powershell
    # 桥接目录是按哪个版本生成的（SKILL.md 标题行）
-   Select-String -Path (Join-Path $env:DSH_PROFILE_DIR 'node_modules\dsh-unity-mcp-bridge\skills\SKILL.md') `
+   Select-String -Path (Join-Path $env:DSH_PROFILE_DIR 'node_modules\dsh-unity-mcp-bridge\skills\unity-mcp-tools\SKILL.md') `
      -Pattern 'com\.ivanmurzak\.unity\.mcp@'
    # 与项目里的包版本不一致 → 重生成，然后重启 dsh web（技能在插件启动时注册，不重启不生效）
    powershell -NoProfile -ExecutionPolicy Bypass -File "<dsh-unity-mcp-bridge>\tools\generate-unity-mcp-catalog.ps1" -ProjectRoot $proj

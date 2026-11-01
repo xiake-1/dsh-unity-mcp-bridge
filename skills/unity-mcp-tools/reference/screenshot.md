@@ -1,6 +1,6 @@
 ﻿# Screenshot — 4 个命令
 
-调用名 `mcp__unity__<命令名>`；`[on]` = Unity 侧默认启用（可直接调），`[off]` = 默认关闭 —— 用 `mcp__unity__tool-set-enabled-state` 开启后，**从下一个步骤起可调用**（工具注册表在请求边界重建）。
+调用名 `mcp__unity__<命令名>`；`[on]` = Unity 侧默认可见（可直接调），`[off]` = 默认隐藏 —— 用 `mcp__unity__tool-set-enabled-state`（1.6.0 正式名 `tool-set-visibility`，等价）设为 visible 后，**从下一个步骤起可调用**（工具注册表在请求边界重建）。
 
 - `screenshot-camera` [off] — Captures a screenshot from a camera and returns it as an image.
   - 参数: cameraRef?, width?, height?

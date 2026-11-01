@@ -1,7 +1,7 @@
 ---
 name: unity-mcp-check
-description: 检查 DSH 的 unity-mcp-bridge 与 Unity 项目的 MCP 插件是否连通：两端端口统一到 20000（项目侧不是 20000 就用 bootstrap-local 改过来）、把 AI agent 配成 Kilo Code（写 .kilocode/mcp.json，端口跟着 20000）、按 reference/tool.md 把 Unity 工具集初始化为只留 tool-set-enabled-state、自检 /unity-mcp-tools 的命令目录是否按当前插件版本生成（命令名随版本变）、用 tools/offline-package.mjs check 比对「上游最新 / vendor 离线包 / 项目已装」三层版本并给出更新路径（下载新版本优先走代理，断点续传 + SHA256 校验），再用 unity_mcp_activate 实测。
-whenToUse: 用户要求「检查 / 排查 Unity-MCP 连接」或「AI Game Developer / Unity-MCP 有没有新版本、要不要升级」，或 unity_mcp_activate 连不上、/unity-mcp-tools 激活失败、刚跑完 /unity-mcp-install 时。
+description: 检查 DSH 的 unity-mcp-bridge 与 Unity 项目这条链路是否就绪：Unity 插件是否安装成功、两端端口统一到 20000（项目侧不是 20000 就用 bootstrap-local 改过来）、DSH 侧依赖与 bundle 是否加载插件行、Unity 工具集是否初始化成只留 tool-set-enabled-state、/unity-mcp-tools 的命令目录是否按当前插件版本生成，最后用 unity_mcp_activate 实测能否连上 DSH。不做版本检查与升级（用 /unity-mcp-update），也不配 AI agent。
+whenToUse: 用户要求「检查 / 排查 Unity-MCP 连接」、unity_mcp_activate 连不上、/unity-mcp-tools 激活失败、刚跑完 /unity-mcp-install 时；问「有没有新版本 / 要不要升级」请用 /unity-mcp-update。
 ---
 
 # 检查 DSH ↔ Unity-MCP 连接
@@ -12,32 +12,41 @@ whenToUse: 用户要求「检查 / 排查 Unity-MCP 连接」或「AI Game Devel
 |---|---|---|
 | DSH | 桥接插件 `dsh-unity-mcp-bridge` | `%DSH_HOME%\profiles\%DSH_PROFILE%\`：`package.json` 的依赖 **和 `dsh.profile.bundles` 里的包名**（决定 bundle 是否加载）；`unity-mcp` 行由插件自带的 `node_modules\dsh-unity-mcp-bridge\cordis.patch.yml` 插入（`url` 默认 `http://localhost:20000/mcp`），profile 自己的 `cordis.patch.yml` 只在需要覆盖端点时出现 |
 | Unity | 包 `com.ivanmurzak.unity.mcp` 起的 MCP 服务器 | 项目 `UserSettings\AI-Game-Developer-Config.json` 的 `host`（必须是 `http://localhost:20000`） |
-| AI agent | 客户端侧的 MCP 配置（本技能默认 **Kilo Code**） | 项目 `.kilocode\mcp.json` 的 `mcpServers.*.url`（端口必须是 20000）+ 同文件所在项目的 `skillsPath`（`.kilocode\skills`） |
 
-> **20000 是唯一标准端口。** 哪一端不是 20000，就把**那一端**改成 20000：Unity 侧用 `unity-mcp-cli bootstrap-local`，DSH 侧的默认 `url` 由插件 bundle patch 提供、本来就是 20000（出现别的端口说明 profile 里有覆盖行，改或删那一行），AI agent 侧重新跑 `configure --agent`（见第 5 步，它会跟着 `--url` 的端口走）。
+检查项：① 插件是否装上 ② 端口是否 20000（不是就改）③ DSH 依赖与 bundle 是否加载插件行 ④ 工具集是否最小 ⑤ 命令目录是否跟得上插件版本 ⑥ 能否连上 DSH。
 
-## 1. DSH 侧现状
+版本新旧、是否升级 → `/unity-mcp-update`；装插件 → `/unity-mcp-install`；配 AI agent 不在本技能范围内。
+
+## 0. 定位 Unity 项目
+
+找 `ProjectSettings\ProjectVersion.txt`（排除 `Library` / `Temp` / `obj` / `node_modules` / `.git`），取唯一那个；0 个或多个就停下来问用户。
 
 ```powershell
-$prof = $env:DSH_PROFILE_DIR          # 例如 C:\Users\<you>\.dsh\profiles\desktop
-# 依赖 + bundle 列表：两者都在，bundle 才会被加载
-Get-Content (Join-Path $prof 'package.json') -Raw | Select-String 'dsh-unity-mcp-bridge'
-# 生效的 unity-mcp 行：默认由插件自带的 bundle patch 插入
-Select-String -Path (Join-Path $prof 'node_modules\dsh-unity-mcp-bridge\cordis.patch.yml') `
-  -Pattern 'id: unity-mcp' -Context 0,12
-# profile 层若有覆盖行，以它为准
-Select-String -Path (Join-Path $prof 'cordis.patch.yml') -Pattern 'unity-mcp' -Context 0,12
+$ws = (Get-Location).Path
+$projects = Get-ChildItem $ws -Directory -Recurse -Depth 4 -ErrorAction SilentlyContinue |
+  Where-Object { Test-Path (Join-Path $_.FullName 'ProjectSettings\ProjectVersion.txt') } |
+  Where-Object { $_.FullName -notmatch '\\(Library|Temp|obj|node_modules|\.git)\\' } |
+  Select-Object -ExpandProperty FullName -Unique
+$projects
 ```
 
-确认四件事：依赖在不在、`dsh.profile.bundles` 里有没有 `dsh-unity-mcp-bridge`、生效的 `url:` 是不是 `http://localhost:20000/mcp`、`serverName`（默认 `unity`）。同时确认**没有**第二份指向同一 `serverName` 的 stock `@deepseek-ai/dsh-mcp-client` 配置。
+## 1. 插件是否安装成功
 
-> 依赖和 bundles 都在、插件页却显示「已安装，未生效」→ 看 bundle patch 是不是空的。0.4.0 及以前它故意是 `[]`，要求使用者把行手写进 profile 层；桌面端会把 profile 层的 `cordis.patch.yml` 当成自己设置的导出文件重写，手写行下次重启就没了。0.5.0 起这一行随 bundle 提供，不再依赖 profile 层。
+```powershell
+$manifest = Join-Path $proj 'Packages\manifest.json'
+Select-String -Path $manifest -Pattern 'com\.ivanmurzak\.unity\.mcp'
+Get-ChildItem (Join-Path $proj 'Library\PackageCache') -Directory -Filter 'com.ivanmurzak.unity.mcp@*' -ErrorAction SilentlyContinue
+```
 
-## 2. 定位 Unity 项目
+- manifest 依赖 **和** `Library\PackageCache` 里都有 → 已装（依赖可能是 `file:` 本地包，属正常）。
+- 只有 manifest、没有 `PackageCache` → Unity 还没解析包：让 Unity 打开/重新加载项目一次再看。
+- 两处都没有 → **未装**：报告后交给 `/unity-mcp-install`，不要在这里装。
 
-找 `ProjectSettings\ProjectVersion.txt`（排除 `Library` / `Temp` / `node_modules` / `.git`），取唯一那个；0 个或多个就停下来问用户。
+## 2. 端口是不是 20000（不是就改）
 
-## 3. 读两端的端口
+**20000 是唯一标准端口。** 哪一端不是 20000，就把**那一端**改成 20000。
+
+### 2.1 读现状
 
 ```powershell
 # Unity 侧：项目配置里的 host / token（configure --list 也会打印 Host）
@@ -49,16 +58,17 @@ Get-Content (Join-Path $proj 'UserSettings\AI-Game-Developer-Config.json') -Raw 
 Select-String -Path (Join-Path $proj 'Library\mcp-server\win-x64\logs\server-log.txt') `
   -Pattern 'Start listening on port' | Select-Object -Last 1
 
-# DSH 侧：生效的 url（bundle 默认，profile 层的覆盖行优先）
+# DSH 侧：生效的 url（bundle 默认 20000/mcp；profile 层覆盖行优先）
+$prof = $env:DSH_PROFILE_DIR
 Select-String -Path (Join-Path $prof 'node_modules\dsh-unity-mcp-bridge\cordis.patch.yml') -Pattern 'url:'
-Select-String -Path (Join-Path $prof 'cordis.patch.yml') -Pattern 'url:'
+Select-String -Path (Join-Path $prof 'cordis.patch.yml') -Pattern 'unity-mcp' -Context 0,12
 ```
 
 `unity-mcp-cli status $proj` 会同时列出 **Config Server**（项目配置里的地址，就是 Unity 插件对外服务的地址）和它自己的 **Local MCP Server** 地址 —— **以 Config Server 为准**，不要被另一个端口带跑。
 
-## 4. 把两端统一到 20000
+### 2.2 Unity 侧不是 20000 → 改成 20000
 
-**Unity 侧不是 20000 时**（改写项目自己的配置，不是改 DSH）：
+改写项目自己的配置，不是改 DSH。需要 `unity-mcp-cli`；缺了就按 `/unity-mcp-install` 第 2 步装（`npm install -g unity-mcp-cli`）。
 
 ```powershell
 # 先看它会改什么，不落盘
@@ -73,70 +83,59 @@ unity-mcp-cli bootstrap-local $proj --url 'http://localhost:20000/' --token '<�
 - 该命令把配置里的 `host` 改成 `http://localhost:20000`（`connectionMode` 保持 `Custom`，或从 Cloud 切到 Custom），**幂等**，可重复执行。
 - token 用**项目里已有的那个**，不要凭空生成；`--dry-run` 的 diff 要念给用户看。
 - **必须让 Unity 重新加载项目**（或重启编辑器），服务器才会在新端口上监听 —— 只改文件不算生效。
-- ⚠️ 顺手检查还有谁 pin 了旧端口（项目里的 `.kilocode\mcp.json`、其它 MCP 客户端配置），一并改成 20000，否则那些客户端会连不上。Kilo Code 那份**不要手改**，走第 5 步的 `configure --agent` 重配（它会连 pin 一起重写）。**改动了哪些文件必须报给用户。**
-- 如果用户明确要求保留项目原端口（例如别的客户端已经固定用它），**停下来问**，不要强行统一 —— 本技能的默认策略是统一到 20000。
+- 用户明确要求保留项目原端口时**停下来问**，不要强行统一。
 
-**DSH 侧不是 20000 时**：bundle 默认本来就是 20000，所以先找**覆盖行**——profile 层 `cordis.patch.yml` 里的 `unity-mcp` 条目（旧版本插件留下的是一整个 `- insert:` 块）。备份该文件，把它的 `url:` 改成 `http://localhost:20000/mcp`，或者整块删掉、回落到 bundle 默认；profile 有 `patchReload: live` 则存盘即热重载，否则重启 DSH。只改这一处。
+### 2.3 DSH 侧不是 20000 → 改回 20000
 
-> ⚠️ 桌面端会把 profile 层的 `cordis.patch.yml` 当成自己设置的导出文件重写。把标准配置只写在那里不稳：能删覆盖行就删，靠 bundle 提供。
+bundle 默认就是 `http://localhost:20000/mcp`。出现别的端口说明 profile 层有**覆盖行**：备份 `%DSH_PROFILE_DIR%\cordis.patch.yml`，把它的 `url:` 改成 `http://localhost:20000/mcp`，或整块删掉、回落到 bundle 默认；profile 有 `patchReload: live` 则存盘即热重载，否则重启 DSH。只改这一处。
 
-## 5. 把 AI agent 配成 Kilo Code（`.kilocode\mcp.json`）
+> ⚠️ 桌面端会把 profile 层的 `cordis.patch.yml` 当成自己设置的导出文件重写。能删覆盖行就删，靠 bundle 提供。
 
-**端口定死 20000 之后**再做这步 —— 写进去的 URL 是从 `--url` 推导的，先配后改端口只会留下连不上的客户端配置。
+## 3. DSH 侧：依赖与 bundle 自查
 
 ```powershell
-# 现状：UI 里选中的 agent、skills 目录、是否已有 mcp.json
-Get-Content (Join-Path $proj 'UserSettings\AI-Game-Developer-Config.json') -Raw |
-  Select-String '"skillAutoGenerate"|"skillsPath"|"kilo-code"'
-Test-Path (Join-Path $proj '.kilocode\mcp.json')
-
-# 已存在就先备份，再写
-Copy-Item (Join-Path $proj '.kilocode\mcp.json') `
-  (Join-Path $proj ('.kilocode\mcp.json.bak-' + (Get-Date -Format yyyyMMdd-HHmmss))) -ErrorAction SilentlyContinue
-unity-mcp-cli configure $proj --agent kilo-code --url 'http://localhost:20000'
-Get-Content (Join-Path $proj '.kilocode\mcp.json') -Raw
+$prof = $env:DSH_PROFILE_DIR          # 例如 C:\Users\<you>\.dsh\profiles\desktop
+# 依赖 + bundle 列表：两者都在，bundle 才会被加载
+Get-Content (Join-Path $prof 'package.json') -Raw | Select-String 'dsh-unity-mcp-bridge'
+# 生效的 unity-mcp 行：默认由插件自带的 bundle patch 插入
+Select-String -Path (Join-Path $prof 'node_modules\dsh-unity-mcp-bridge\cordis.patch.yml') `
+  -Pattern 'id: unity-mcp' -Context 0,12
+# profile 层若有覆盖行，以它为准
+Select-String -Path (Join-Path $prof 'cordis.patch.yml') -Pattern 'unity-mcp' -Context 0,12
 ```
 
-- 实测输出 `Configured Kilo Code (kilo-code).` + `config: <proj>\.kilocode\mcp.json`，写出来的是
-  `{"mcpServers":{"ai-game-developer":{"disabled":false,"type":"streamable-http","url":"http://localhost:20000/p/<pin>"}}}`。
-  端口跟着 `--url` 走；路径是**项目 pin**（`/p/<pin>`）而不是 `/mcp`。实测 `http://localhost:20000/mcp` 与 `/p/<pin>` 都返回 200，DSH 侧仍固定用 `/mcp`，两边不冲突。
-- ⚠️ **别用 `setup-mcp`**：CLI 0.91.0、1.2.0 与 **1.5.0** 的 `setup-mcp --list` 都只有 14 个 agent（1.5.0 实测：`antigravity`…`vscode-copilot`，**仍不含 `kilo-code`**），直接 `ERROR: Unknown agent: "kilo-code"`。要用 `configure --agent` —— 它代理到托管 Server 的 configurator，那边实测有 16 个 agent（含 `kilo-code`、`zoo-code`、`other-custom`），用 `<server exe> configure --help` 列全。
-- `configure --agent` 依赖托管二进制 `~\.ai-game-dev\server\<rid>\`；缺了会报 `No managed GameDev-MCP-Server binary found … Run 'unity-mcp-cli install-plugin --with-server' first`。项目里已有 `Library\mcp-server\<rid>\gamedev-mcp-server.exe` 时可直接顶替（实测与 CLI 代理等价）：
+确认四件事：依赖在不在、`dsh.profile.bundles` 里有没有 `dsh-unity-mcp-bridge`、生效的 `url:` 是不是 `http://localhost:20000/mcp`（读法见 2.1，改法见 2.3）、`serverName`（默认 `unity`）。同时确认**没有**第二份指向同一 `serverName` 的 stock `@deepseek-ai/dsh-mcp-client` 配置。
 
-  ```powershell
-  Push-Location $proj
-  & (Join-Path $proj 'Library\mcp-server\win-x64\gamedev-mcp-server.exe') configure --agent kilo-code --url http://localhost:20000
-  Pop-Location
-  ```
+> 依赖和 bundles 都在、插件页却显示「已安装，未生效」→ 看 bundle patch 是不是空的。0.4.0 及以前它故意是 `[]`，要求使用者把行手写进 profile 层；桌面端会把 profile 层的 `cordis.patch.yml` 当成自己设置的导出文件重写，手写行下次重启就没了。0.5.0 起这一行随 bundle 提供，不再依赖 profile 层。
 
-- **Skills 侧**：`.kilocode\skills\<tool>\SKILL.md` 只由 Unity 窗口的 **Auto-generate** 生成（对应配置里的 `skillAutoGenerate: {"kilo-code": true}` 与 `skillsPath: ".kilocode/skills"`）；CLI 的 `setup-skills --list` 同样不含 `kilo-code`，用不了。
-- 换别的 agent：`configure --agent <id>` 同理（`cursor` / `claude-code` / `vscode-copilot` …）。改动的文件（`.kilocode\mcp.json` 及其备份）要报给用户。
+## 4. 初始化工具集（参考 `reference/tool.md`）与命令目录版本自检
 
-## 6. 初始化工具集（参考 `reference/tool.md`）
+Unity 侧**只留一个**可见工具 `tool-set-enabled-state`（1.6.0 起正式名 `tool-set-visibility`，旧名仍可用）：它既是唯一的"开关"，也是桥接 `unity_tools_restore` 的保留集，等于最小常驻状态。
 
-Unity 侧**只留一个**工具 `tool-set-enabled-state`：它是唯一的"开关"，关掉就再也开不回来；这也正是插件的 `unity_tools_restore` 保留集，等于最小常驻状态。
+> **1.6.0 起是「可见性」而不是禁用**：默认只有 7 个核心工具可见，且管理开关本身默认隐藏。隐藏的工具仍可按名调用，但**不会出现在 `tools/list`**（不进入模型上下文，桥接激活后也注册不到），所以这一步必须把开关显式设为 visible，否则模型拿不到任何开关。
 
 ```powershell
-unity-mcp-cli configure $proj --list | Select-String '\[enabled\]'   # 先看当前状态
+# 1.6.0 的 --list 打印 [visible]/[hidden]，旧版 CLI 打印 [enabled]/[disabled]
+unity-mcp-cli configure $proj --list | Select-String '\[(visible|enabled)\]'   # 先看当前状态
 
 # 必须分成两条执行 —— 见下面的顺序陷阱
 unity-mcp-cli configure $proj --disable-all-tools
 unity-mcp-cli configure $proj --enable-tools tool-set-enabled-state
 
-unity-mcp-cli configure $proj --list | Select-String '\[enabled\]'   # 复验：恰好 1 条
+unity-mcp-cli configure $proj --list | Select-String '\[(visible|enabled)\]'   # 复验：恰好 1 条
 ```
 
-- ⚠️ **顺序陷阱（实测）**：`--disable-all-tools` 与 `--enable-tools` **不能写在同一条命令里** —— disable-all 会覆盖 enable，结果连唯一的开关 `tool-set-enabled-state` 都被关掉（0 个启用），那就再也没有工具能把它开回来。必须分两条：先 disable-all，再 enable-tools。
-- 万一已经被全部关掉：单独跑一条 `unity-mcp-cli configure $proj --enable-tools tool-set-enabled-state` 即可救回，不用重装插件。
-- 复验结果应当**只有** `tool-set-enabled-state` 是 `[enabled]`，其余全是 `[disabled]`（注册总数随插件版本变：1.2.0 实测 **1 enabled / 17 disabled**，总数 18；0.9x 是 73。看到 18 不是「工具变少了」，是版本差异，见下面第 7 条）。
+- ⚠️ **顺序陷阱（实测）**：`--disable-all-tools` 与 `--enable-tools` **不能写在同一条命令里** —— disable-all 会覆盖 enable，结果连唯一的开关 `tool-set-enabled-state` 都被隐藏（0 个可见），模型就再也看不到开关了。必须分两条：先 disable-all，再 enable-tools。
+- 万一已经被全部隐藏：单独跑一条 `unity-mcp-cli configure $proj --enable-tools tool-set-enabled-state` 即可救回，不用重装插件。
+- 复验结果应当**只有** `tool-set-enabled-state` 是 `[visible]`（旧版 CLI 显示 `[enabled]`），其余全是 `[hidden]` / `[disabled]`。注册总数随插件版本变：**1.6.0 = 19 个（默认 7 可见）**，1.2.0 = 18 个（默认 7），0.9x = 73。看到 19 不是「工具变多了」。
 - 这一步直接读写项目配置，**不需要 Unity 在运行**。
-- prompts / resources 默认全关，保持关闭即可；除非用户明确要求，不要打开。
-- 需要别的命令时，交给 `/unity-mcp-tools` 的按需流程（开启 → 用 → `unity_tools_restore` 收回），不要在这里预先全开：每个已启用命令的 schema 都会进入之后每一次模型请求。
+- prompts / resources 默认全隐藏，保持关闭即可；除非用户明确要求，不要打开。
+- 需要别的命令时，交给 `/unity-mcp-tools` 的按需流程（显示 → 用 → `unity_tools_restore` 收回），不要在这里预先全开：每个可见命令的 schema 都会进入之后每一次模型请求。
 - **命令目录版本自检（必做）**：`/unity-mcp-tools` 的索引和 `reference/*.md` 是按某个插件版本从源码生成的，**命令名随版本变**。比对两边，不一致就提示重生成，不要照着旧目录去开工具：
 
   ```powershell
   # 桥接自带的目录是按哪个版本生成的（SKILL.md 标题行）
-  Select-String -Path (Join-Path $prof 'node_modules\dsh-unity-mcp-bridge\skills\SKILL.md') `
+  Select-String -Path (Join-Path $prof 'node_modules\dsh-unity-mcp-bridge\skills\unity-mcp-tools\SKILL.md') `
     -Pattern 'com\.ivanmurzak\.unity\.mcp@'
   # 项目里实际装的版本
   (Get-ChildItem (Join-Path $proj 'Library\PackageCache') -Directory -Filter 'com.ivanmurzak.unity.mcp@*').Name
@@ -146,41 +145,7 @@ unity-mcp-cli configure $proj --list | Select-String '\[enabled\]'   # 复验：
 
   实测代价：目录停在 0.91.0 而项目已是 1.2.0 时，18 个分类文件里有 13 个写的是**已删除**的命令（`gameobject-*`、`assets-*`、`scene-*`、`profiler-*`、`console-*`、`editor-application-*`、`editor-selection-*`、`object-*`、`reflection-method-*`、`type-get-json-schema`），1.2.0 由 `rql-query` / `rql-mutate` / `rql-schema` 承担 —— 照旧目录调用必然 `tool not found`。
 
-## 7. 版本与更新检查（必做；默认只报告，不擅自升级）
-
-一次比三层：**上游最新 / 插件自带 `vendor/` 离线包 / 项目已装**，外加 `unity-mcp-cli`。
-
-```powershell
-# <bridge> = 插件目录（已安装副本：%DSH_PROFILE_DIR%\node_modules\dsh-unity-mcp-bridge）
-# 代理优先：GitHub 的 release 资产直连常被掐断（实测 ECONNRESET on release-assets.githubusercontent.com）
-$px = (Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings' |
-        Where-Object ProxyEnable -eq 1).ProxyServer          # 实测 127.0.0.1:7897，别猜端口
-if ($px) { $env:HTTPS_PROXY = "http://$px"; $env:NODE_USE_ENV_PROXY = '1' }
-node "<bridge>\tools\offline-package.mjs" check --project $proj --cli-version (unity-mcp-cli --version)
-```
-
-- 脚本无第三方依赖（Node 24）。`--json` 给出机器可读结果；`--no-proxy` 强制直连。
-- **`NODE_USE_ENV_PROXY=1` 不能省**：Node 24 的全局 `fetch` 否则无视 `HTTPS_PROXY`（实测设了等于没设）。脚本自己会补，外层也设上更稳；也可以直接 `--proxy http://127.0.0.1:<port>`。
-- 网络策略是「代理 ↔ 直连互为兜底」：查询类（OpenUPM / npm / GitHub API）先直连，**下载类（Server zip、`SHA256SUMS`）先代理**，失败再直连。
-- **lockstep 判据不是「谁新用谁」**：插件 tarball 里 `Editor/Scripts/McpServerManager.cs` 的 `ServerVersion` 常量才是目标 —— 插件 `1.5.0` 钉 Server **`9.2.17`**；CLI 与插件同号（`1.5.0`）。脚本直接从 tarball 读这个常量，写进 `vendor/manifest.json` 的 `plugin.pinnedServerVersion`。
-- 项目侧读两处：`Packages\manifest.json` 的依赖（可能是 `file:…` 本地包依赖）与 `Library\PackageCache\com.ivanmurzak.unity.mcp@*`。
-
-### 7.1 要更新时：优先用代理把新版本拉到 `vendor/`，再安装
-
-```powershell
-node "<bridge>\tools\offline-package.mjs" fetch --plugin-version <latest>    # 不给版本就取上游最新
-node "<bridge>\tools\offline-package.mjs" install --project $proj --dry-run  # 先看会改什么
-node "<bridge>\tools\offline-package.mjs" install --project $proj
-unity-mcp-cli install-plugin $proj --with-server --server-version <pinned> `
-  --server-source "<bridge>\vendor\gamedev-mcp-server-<rid>-<ver>.zip"
-```
-
-- 下载有 4 次退避重试，失败保留 `.part`，重跑从断点续传（实测 GitHub 资产这一步会 `ECONNRESET`，第一次失败、第二次即通）。
-- zip 的 SHA256 对着**同一 release** 的 `SHA256SUMS` 校验，不匹配直接失败退出，不会留下「装上了但内容不对」的包。
-- 装完照第 6 步末尾**重生成命令目录**并重启 `dsh web`（命令名随插件版本变）。
-- 用户没点头就不升级：本技能的默认动作是**报告 + 给出可复制的命令**，升级动作交给 `/unity-mcp-install` 5.2。
-
-## 8. 探测与实测
+## 5. 是否连接到 DSH（实测）
 
 ```powershell
 Test-NetConnection -ComputerName localhost -Port 20000 -InformationLevel Quiet
@@ -189,26 +154,22 @@ unity-mcp-cli status $proj                 # 需要时用 --url / --token / --ti
 unity-mcp-cli wait-for-ready $proj         # 最长 120s
 ```
 
-DSH 侧只有一条真正的实测：**调用 `unity_mcp_activate`**。
+真正的实测只有一条：**调用 `unity_mcp_activate`**。
 
 - 成功 → 桥接连上并注册 `mcp__unity__*` 工具，检查完成；若本次任务不需要 Unity，立刻 `unity_tools_restore` 回到休眠（它同时把工具集还原成只留 `tool-set-enabled-state`）。
-- 失败 → 保留错误原文（`ECONNREFUSED` = 20000 没人听；404/405 = 端点路径不对；401/403 = token 不对），再回到第 4 步核对两端端口。
+- 失败 → 保留错误原文，按下面判断，再回第 2 步核对端口：`ECONNREFUSED` = 20000 没人听；404/405 = 端点路径不对；401/403 = token 不对。
+- 工具 `unity_mcp_activate` 本身不存在 → 桥接插件没加载，属于 DSH 侧安装问题（用 `dsh plugin` 检查是否安装、重启应用）。
 
-## 9. 报告格式
+## 6. 报告格式
 
 | 检查项 | 结果 |
 |---|---|
-| `unity-mcp-cli` | 已装 v1.5.0（与插件 lockstep）/ 未装 / 已升级 1.2.0 → 1.5.0 |
-| Unity 包 `com.ivanmurzak.unity.mcp` | 已装 1.2.0 / 未装 |
-| 版本检查（第 7 步） | 上游 plugin 1.5.0 / server 9.2.17 / cli 1.5.0 ｜ vendor 1.5.0 + 9.2.17（钉住 9.2.17）｜ 项目 1.5.0 → 一致 / 落后（已给 `fetch`+`install` 命令，未擅自升级） |
-| 命令目录（`/unity-mcp-tools`） | 按 1.2.0 生成，与项目一致 / 按 0.91.0 生成 → 已重生成（需重启 `dsh web`） |
-| MCP Server | 项目 `Library\mcp-server\win-x64\` 9.2.11 + CLI 托管目录 `~\.ai-game-dev\server\win-x64\`（含 `version` 标记）/ 缺 |
-| Unity 编辑器 | 运行中 / 未运行 |
-| Unity 侧端口 | 原 24009 → 已统一 20000（附备份路径）/ 本来就是 20000 |
-| DSH 侧 url | `http://localhost:20000/mcp`（一致 / 已改） |
-| 插件加载 | bundle 已插入 `unity-mcp` 行（0.5.0）/ bundle 为空 → 已升级或补了覆盖行 |
-| AI agent | Kilo Code：`.kilocode\mcp.json` → `http://localhost:20000/p/<pin>`；`skillsPath=.kilocode\skills` |
-| 工具集 | 只有 `tool-set-enabled-state` 为 `[enabled]` |
+| Unity 插件 `com.ivanmurzak.unity.mcp` | 已装（manifest 依赖 = …，PackageCache = …）/ 未装 → 交由 `/unity-mcp-install` |
+| Unity 侧端口 | 本来就是 20000 / 原 24009 → 已改 20000（附备份路径，需重载 Unity）/ 未改（用户要求保留） |
+| DSH 侧 url | `http://localhost:20000/mcp`（一致 / 已改 / 无覆盖行） |
+| 插件加载 | bundle 已插入 `unity-mcp` 行（0.5.0）/ bundle 为空 → 已补覆盖行 / `dsh.profile.bundles` 缺该包 |
+| 命令目录（`/unity-mcp-tools`） | 按 1.6.0 生成，与项目一致 / 按 0.91.0 生成 → 已重生成（需重启 `dsh web`） |
+| 工具集 | 只有 `tool-set-enabled-state` 为 `[visible]`（旧版 CLI 的 `[enabled]`） |
 | `unity_mcp_activate` | 成功 / 失败（原文错误） |
 | 改动的文件 | 列出（含备份路径）；无则写"无" |
 
@@ -218,20 +179,11 @@ DSH 侧只有一条真正的实测：**调用 `unity_mcp_activate`**。
 |---|---|---|
 | 20000 没人听 | Unity 没开、改了配置但没重载、或服务器没启动 | 重载项目 / 在 Window → AI Game Developer 里启动服务器 |
 | 改了 host 但端口没变 | Unity 没重新加载项目 | 重启编辑器；`status` 再看 Config Server |
-| 别的客户端连不上 | 它们仍 pin 在旧端口（如 24009） | 一并改成 20000，或与用户确认是否回退 |
 | manifest 里有包但连不上 | Unity 还没解析包 | 用 Unity 打开项目一次 |
 | 404 / 405 | 端点路径不对（`/mcp` ↔ `/p/<token>`） | 以 `http://localhost:20000/mcp` 为准；需要 token 路径时再补 |
 | 401 / 403 | token 缺失或过期 | 用项目配置里的 token；或 `bootstrap-local --url ... --token ...` 重新固定 |
-| 工具全被关掉（含 `tool-set-enabled-state`） | 把 `--disable-all-tools` 与 `--enable-tools` 写进了同一条命令（上面那个顺序陷阱） | 单独跑一条 `unity-mcp-cli configure $proj --enable-tools tool-set-enabled-state` 救回 |
+| 工具全被隐藏（含 `tool-set-enabled-state`） | 把 `--disable-all-tools` 与 `--enable-tools` 写进了同一条命令（上面的顺序陷阱） | 单独跑一条 `unity-mcp-cli configure $proj --enable-tools tool-set-enabled-state` 救回 |
+| `mcp__unity__gameobject-find` 之类报 `tool not found` | 命令目录是按旧插件版本生成的（1.2.0 已移除 `gameobject-*` / `assets-*` / `scene-*` / `profiler-*` 等） | 按第 4 步做目录版本自检并重生成 + 重启 `dsh web`；读写 Unity 内容改走 `rql-query` / `rql-mutate` / `rql-schema` |
 | 工具名冲突 / 行为异常 | stock `dsh-mcp-client` 与桥接插件同时跑同一 `serverName` | 只留一个 |
-| `ERROR: Unknown agent: "kilo-code"` | 用了 `setup-mcp`（CLI 0.91.0 / 1.2.0 / 1.5.0 的列表只有 14 个 agent，不含 `kilo-code`） | 改用 `unity-mcp-cli configure $proj --agent kilo-code --url http://localhost:20000`（托管 Server 侧有 16 个） |
-| `No managed GameDev-MCP-Server binary found …` | 没装托管 Server（缺 `--with-server`） | 跑 `/unity-mcp-install` 的 `install-plugin --with-server`；或临时用项目 `Library\mcp-server\<rid>\gamedev-mcp-server.exe` 直接跑 `configure --agent` |
-| 凭空多出个监听 8080 的 `gamedev-mcp-server` | 对 server exe 跑了裸 `--help`（它不是帮助，是直接启动） | 按端口找 PID 杀掉（`Get-NetTCPConnection -LocalPort 8080`）；只用 `configure --help` 这类子命令帮助 |
-| DSH 通、Kilo Code 连不上 | `.kilocode\mcp.json` 里 pin 的端口不是 20000（端口改过后没重配 agent） | 重跑 `configure --agent kilo-code --url http://localhost:20000`，再核对 `url` 里的端口 |
-| `mcp__unity__gameobject-find` 之类报 `tool not found` | 命令目录是按旧插件版本生成的（1.2.0 已移除 `gameobject-*` / `assets-*` / `scene-*` / `profiler-*` 等） | 按第 6 步做目录版本自检并重生成 + 重启 `dsh web`；读写 Unity 内容改走 `rql-query` / `rql-mutate` / `rql-schema` |
 | 插件页显示「已安装，未生效」 | bundle 没有插入插件行（0.4.0 及以前 bundle patch 是 `[]`），或 profile 的 `dsh.profile.bundles` 里没有这个包 | 升级到 ≥0.5.0（行随 bundle 提供）；确认 `dsh.profile.bundles` 含 `dsh-unity-mcp-bridge`；重启 |
 | 重启后手写进 profile 层的配置不见了 | 桌面端把 profile 的 `cordis.patch.yml` 当自己的设置导出重写，不在它设置模型里的条目会被抹掉 | 插件行交给 bundle，别手写；其它设置走 UI |
-| 桌面端启动即崩，日志是 `webserver: host "0.0.0.0" is an unspecified (wildcard) address` | 从旧备份恢复的 `webserver` 块用了 `0.0.0.0`，当前版本拒绝通配监听 | 删掉该块或改成具体网卡 IPv4；局域网访问走 UI 的 remote-web-ui 开关，别手填 `0.0.0.0` |
-| `check` 某层显示 `?` 或报「…失败」 | 代理与直连都失败（GitHub API 被掐 / npm 超时） | 设 `HTTPS_PROXY` + `NODE_USE_ENV_PROXY=1`（或直接 `--proxy http://127.0.0.1:<port>`）重跑；插件版本可 `--plugin-version` 手工指定 |
-| `fetch` 报 `SHA256 不匹配` | 下载被中间盒改写，或复用了半截文件 | 删掉该 zip 与 `*.part`，重跑 `fetch --force`；仍不匹配就换代理节点 |
-| `fetch` 报 `下载不完整 …（保留 .part，可重跑续传）` | 连接被掐断（实测 GitHub release 资产会） | 直接重跑 `fetch`，从 `.part` 续传，别手删 |

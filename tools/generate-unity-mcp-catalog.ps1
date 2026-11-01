@@ -4,15 +4,20 @@
   从 Unity-MCP 插件源码生成「分层」工具目录 Skill。
 
 .DESCRIPTION
-  输出结构（分层 = 按需付费）：
+  输出结构（分层 = 按需付费），全部落在 skills/unity-mcp-tools/ 下：
     SKILL.md                 L1 索引：分类 + 命令名（不含解释），常驻只有 frontmatter 一行
     reference/<分类>.md       L2 详情：每个命令的一行用途 + 参数名 + 默认开关 + 源码路径
+    reference/extensions.md  可选扩展索引：插件包内 extensions.catalog.json 列出的扩展与它们的命令
 
   分类取自插件自身的 [AiTool(Title = "Assets / Prefab / Create")]，
   命令名取自同一特性里的常量，用途取自 [Description]，参数名从方法签名解析。
 
+  -PackageRoot 可以直接指向从 vendor/ 的 tarball 解出来的 package 目录（不含 @版本 后缀也认得，
+  版本从包内 package.json 读），所以「离线包升级后重生成目录」不需要 Unity 工程。
+
   重要前提：本目录只是「知识」。Unity 侧**未启用**的命令无法被调用；
-  MCP 服务未运行则一个命令都调不到。文档不产生能力。
+  MCP 服务未运行则一个命令都调不到。文档不产生能力。扩展新增的命令**不在本索引**，
+  只能用 unity-tool-list 取实时清单。
 #>
 [CmdletBinding()]
 param(
@@ -26,17 +31,17 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-if (-not $ProjectRoot) {
-    $d = $PSScriptRoot
-    while ($d -and -not (Test-Path (Join-Path $d 'Assets'))) {
-        $parent = Split-Path -Parent $d
-        if (-not $parent -or $parent -eq $d) { throw "未能定位 Unity 工程根（从 $PSScriptRoot 向上没找到 Assets）。" }
-        $d = $parent
-    }
-    $ProjectRoot = $d
-}
-
 if (-not $PackageRoot) {
+    if (-not $ProjectRoot) {
+        $d = $PSScriptRoot
+        while ($d -and -not (Test-Path (Join-Path $d 'Assets'))) {
+            $parent = Split-Path -Parent $d
+            if (-not $parent -or $parent -eq $d) { throw "未能定位 Unity 工程根（从 $PSScriptRoot 向上没找到 Assets）。请用 -ProjectRoot 或 -PackageRoot 指定。" }
+            $d = $parent
+        }
+        $ProjectRoot = $d
+    }
+
     $cand = Get-ChildItem (Join-Path $ProjectRoot 'Library/PackageCache') -Directory -Filter 'com.ivanmurzak.unity.mcp@*' -ErrorAction SilentlyContinue |
         Sort-Object Name -Descending | Select-Object -First 1
     if (-not $cand) { throw "未找到 com.ivanmurzak.unity.mcp@* 包，请用 -PackageRoot 指定。" }
@@ -48,6 +53,26 @@ $toolRoot = Join-Path $apiRoot 'Tool'
 if (-not (Test-Path $toolRoot)) { throw "未找到 API/Tool 目录: $toolRoot" }
 
 $pkgName = Split-Path $PackageRoot -Leaf
+# -PackageRoot 也可能是从 vendor tarball 解出来的裸 package 目录（叶子名就是 "package"），
+# 所以版本以包内 package.json 为准；读不到才退回目录名。
+$pkgManifestPath = Join-Path $PackageRoot 'package.json'
+if (Test-Path $pkgManifestPath) {
+    $pkgJson = Get-Content $pkgManifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    if ($pkgJson.name -and $pkgJson.version) { $pkgName = "$($pkgJson.name)@$($pkgJson.version)" }
+}
+
+# ---------- 扩展目录（可选扩展，来自包内 extensions.catalog.json） ----------
+$extensions = @()
+$extCatalogPath = Join-Path $PackageRoot 'extensions.catalog.json'
+if (Test-Path $extCatalogPath) {
+    try {
+        $extCatalog = Get-Content $extCatalogPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        $extensions = @($extCatalog.extensions)
+    } catch {
+        Write-Warning "扩展目录解析失败（$extCatalogPath）：$($_.Exception.Message)"
+    }
+}
+
 $files = Get-ChildItem $apiRoot -Recurse -File -Filter '*.cs'
 $toolFiles = Get-ChildItem $toolRoot -Recurse -File -Filter '*.cs'
 
@@ -243,7 +268,7 @@ foreach ($f in $toolFiles) {
         $toolName = if ($constMap.ContainsKey($id)) { $constMap[$id] } else { $id }
         $tm = [regex]::Match($body, 'Title\s*=\s*"([^"]*)"')
         $title = if ($tm.Success) { $tm.Groups[1].Value } else { $toolName }
-        $em = [regex]::Match($body, 'Enabled\s*=\s*(true|false)')
+        $em = [regex]::Match($body, '(?:Visible|Enabled)\s*=\s*(true|false)')
         $enabled = if ($em.Success) { $em.Groups[1].Value } else { 'true' }
 
         $tail = $text.Substring($m.Index + $m.Length)
@@ -280,9 +305,10 @@ function Get-Slug([string]$s) {
     return $x.Trim('-')
 }
 
-$outDir = if ($OutDir) { $OutDir } else { Join-Path (Split-Path -Parent $PSScriptRoot) 'skills' }
+$outDir = if ($OutDir) { $OutDir } else { Join-Path (Join-Path (Split-Path -Parent $PSScriptRoot) 'skills') 'unity-mcp-tools' }
 $refDir = Join-Path $outDir 'reference'
 if (Test-Path $refDir) { Remove-Item $refDir -Recurse -Force }
+New-Item -ItemType Directory -Force -Path $outDir | Out-Null
 New-Item -ItemType Directory -Force -Path $refDir | Out-Null
 
 $stamp = Get-Date -Format 'yyyy-MM-dd'
@@ -292,7 +318,7 @@ $on = ($rows | Where-Object Default -eq 'on').Count
 $s1 = New-Object System.Text.StringBuilder
 [void]$s1.AppendLine('---')
 [void]$s1.AppendLine('name: unity-mcp-tools')
-[void]$s1.AppendLine('description: Unity-MCP 命令索引（分类 + 命令名），含「激活 → 按需开启 → 用完恢复休眠」工作流。需要某命令的用途或参数时，读 reference/<分类>.md。')
+[void]$s1.AppendLine('description: Unity-MCP 命令索引（分类 + 命令名），含「激活 → 按需开启 → 用完恢复休眠」工作流。需要某命令的用途或参数时，读 reference/<分类>.md；可选扩展清单见 reference/extensions.md。')
 [void]$s1.AppendLine('whenToUse: 由用户以 /unity-mcp-tools 调用：Unity 能力默认完全关闭，调用本技能后先激活，再按索引定位并开启所需命令，任务结束必须恢复休眠。')
 [void]$s1.AppendLine('---')
 [void]$s1.AppendLine('')
@@ -309,26 +335,39 @@ $s1 = New-Object System.Text.StringBuilder
 [void]$s1.AppendLine('0. **激活** —— 先调用 `unity_mcp_activate`，建立连接并注册 Unity 工具（本技能被调用后的第一步）。')
 [void]$s1.AppendLine('1. **定位** —— 在本索引找到需要的能力，读对应的 `reference/<分类>.md`，拿到命令名与参数名。')
 [void]$s1.AppendLine('   - 索引之外的命令名（例如装了扩展包后新增的）先调 `mcp__unity__unity-tool-list` 核对，不要凭记忆猜。')
-[void]$s1.AppendLine('2. **开启** —— 调用 `mcp__unity__tool-set-enabled-state`，把需要的命令设为 `enabled: true`（可一次传多个）。')
+[void]$s1.AppendLine('2. **开启** —— 调用 `mcp__unity__tool-set-enabled-state`（桥接保留的最小开关；1.6.0 起正式名 `tool-set-visibility`，两者等价），把需要的命令设为 `enabled: true`（或 `visible: true`；可一次传多个）。')
+[void]$s1.AppendLine('   - 1.6.0 起的“可见性”只决定工具是否出现在 `tools/list`（= 是否进入模型上下文）；隐藏的工具仍可按名调用，但不在索引可见列表里。')
 [void]$s1.AppendLine('   - 开启后**下一个步骤**才生效：工具注册表在请求边界重建，**不能在同一个步骤里开启并调用**。')
 [void]$s1.AppendLine('3. **使用** —— 下一步直接调用 `mcp__unity__<命令名>`。')
 [void]$s1.AppendLine('   - 读写 Unity 内容优先走 RQL：`rql-schema` 认类型 → `rql-query` 读 → `rql-mutate` 写（`dry_run: true` 先预览；改动在编辑器里 Ctrl+Z 可撤销，全有或全无）。')
-[void]$s1.AppendLine('4. **恢复（必做，任务结束时）** —— 调用 `unity_tools_restore`：关闭除 `tool-set-enabled-state` 以外的全部已开启命令，并断开连接、注销全部 `mcp__unity__*` 工具，回到休眠状态。')
+[void]$s1.AppendLine('4. **恢复（必做，任务结束时）** —— 调用 `unity_tools_restore`：隐藏除 `tool-set-enabled-state` 以外的全部已开启命令，并断开连接、注销全部 `mcp__unity__*` 工具，回到休眠状态。')
 [void]$s1.AppendLine('   - 想保留个别命令：`unity_tools_restore({ "keep": ["rql-query"] })`（仍会断开休眠）。')
 [void]$s1.AppendLine('')
-[void]$s1.AppendLine('为什么必须恢复：**每个处于开启状态的命令，其完整 JSON Schema 都会进入之后每一次模型请求**（未开启的不会）。开启是临时的、可回收的成本；忘记关闭就等于把这个成本永久留在上下文里。')
+[void]$s1.AppendLine('为什么必须恢复：**每个处于可见状态的命令，其完整 JSON Schema 都会进入之后每一次模型请求**（隐藏的不会）。开启是临时的、可回收的成本；忘记关闭就等于把这个成本永久留在上下文里。')
 [void]$s1.AppendLine('')
 [void]$s1.AppendLine('## 版本适配（读索引前先确认）')
 [void]$s1.AppendLine('')
 [void]$s1.AppendLine('- 本索引由插件源码生成，**命令名随包版本变**；标题行的包版本就是本索引的依据。换版本后重新生成，不要沿用旧索引。')
 [void]$s1.AppendLine('- **1.2.0 起**：`gameobject-*`、`assets-*`、`scene-*`、`profiler-*`、`console-*`、`editor-application-*`、`editor-selection-*`、`object-*`、`reflection-method-*`、`type-get-json-schema` 已从插件中移除，改由 `rql-query` / `rql-mutate` / `rql-schema` 承担（见 `reference/rql.md`）。按旧名字调用必然失败。')
-[void]$s1.AppendLine('- 扩展包（Animation / Cinemachine / InputSystem / Navigation / ParticleSystem / ProBuilder / Splines / Terrain / Tilemap / Timeline）会新增命令，本索引不含它们 —— 用 `unity-tool-list` 取实时清单。')
+[void]$s1.AppendLine('- **1.6.0 起**：`tool-set-enabled-state` 更名为 `tool-set-visibility`（旧名保留，等价；`Enabled` 字段即 `Visible`）；“启用/关闭”实际是**可见性**——只影响 `tools/list` 是否列出（即是否进入模型上下文），隐藏的工具仍可按名调用。默认只有少数核心工具可见，**管理开关本身也默认隐藏**，所以要先用 CLI 把它设为 visible，桥接激活后模型才拿得到开关。')
+if ($extensions.Count -gt 0) {
+    $extNames = ($extensions | ForEach-Object { $_.name }) -join ' / '
+    [void]$s1.AppendLine("- 扩展包（$($extensions.Count) 个：$extNames）都是独立 UPM 包，装到工程后才新增命令；**本索引不含扩展命令** —— 可选哪些扩展、各带哪些命令见 ``reference/extensions.md``，装完用 ``unity-tool-list`` 取实时清单。")
+} else {
+    [void]$s1.AppendLine('- 扩展包（Animation / Cinemachine / InputSystem / Navigation / ParticleSystem / ProBuilder / Splines / Terrain / Tilemap / Timeline）会新增命令，本索引不含它们 —— 用 `unity-tool-list` 取实时清单。')
+}
 [void]$s1.AppendLine('- 插件的 `toolFormat`（`Rql` | `Json`，1.2.0 默认 `Rql`）决定工具参数与结果的数据表示；写参数前看 `reference/<分类>.md` 的参数说明。')
 [void]$s1.AppendLine('')
 foreach ($g in ($rows | Group-Object Category | Sort-Object Name)) {
     $names = ($g.Group | ForEach-Object { $_.Tool }) -join ', '
     [void]$s1.AppendLine("## $($g.Name) ($($g.Count)) → ``reference/$(Get-Slug $g.Name).md``")
     [void]$s1.AppendLine($names)
+    [void]$s1.AppendLine('')
+}
+if ($extensions.Count -gt 0) {
+    $extNames = ($extensions | ForEach-Object { $_.name }) -join ', '
+    [void]$s1.AppendLine("## Extensions ($($extensions.Count)) → ``reference/extensions.md``")
+    [void]$s1.AppendLine($extNames)
     [void]$s1.AppendLine('')
 }
 Set-Content -Path (Join-Path $outDir 'SKILL.md') -Value $s1.ToString() -Encoding UTF8
@@ -338,7 +377,7 @@ foreach ($g in ($rows | Group-Object Category | Sort-Object Name)) {
     $s2 = New-Object System.Text.StringBuilder
     [void]$s2.AppendLine("# $($g.Name) — $($g.Count) 个命令")
     [void]$s2.AppendLine('')
-    [void]$s2.AppendLine('调用名 `mcp__unity__<命令名>`；`[on]` = Unity 侧默认启用（可直接调），`[off]` = 默认关闭 —— 用 `mcp__unity__tool-set-enabled-state` 开启后，**从下一个步骤起可调用**（工具注册表在请求边界重建）。')
+    [void]$s2.AppendLine('调用名 `mcp__unity__<命令名>`；`[on]` = Unity 侧默认可见（可直接调），`[off]` = 默认隐藏 —— 用 `mcp__unity__tool-set-enabled-state`（1.6.0 正式名 `tool-set-visibility`，等价）设为 visible 后，**从下一个步骤起可调用**（工具注册表在请求边界重建）。')
     [void]$s2.AppendLine('')
     foreach ($r in ($g.Group | Sort-Object Tool)) {
         $tag = if ($r.Default -eq 'on') { '[on]' } else { '[off]' }
@@ -370,6 +409,31 @@ foreach ($g in ($rows | Group-Object Category | Sort-Object Name)) {
     Set-Content -Path (Join-Path $refDir "$(Get-Slug $g.Name).md") -Value $s2.ToString() -Encoding UTF8
 }
 
+# ---------- L2：可选扩展索引（扩展是独立 UPM 包，命令不并入上面的分类） ----------
+if ($extensions.Count -gt 0) {
+    $s3 = New-Object System.Text.StringBuilder
+    [void]$s3.AppendLine("# Extensions — $($extensions.Count) 个可选扩展")
+    [void]$s3.AppendLine('')
+    [void]$s3.AppendLine("来源：插件包 ``$pkgName`` 内的 ``extensions.catalog.json``（生成 $stamp）。")
+    [void]$s3.AppendLine('')
+    [void]$s3.AppendLine('这些是**可选扩展**，每个都是独立 UPM 包；装进 Unity 工程后才会新增命令，**且不会出现在本索引其余分类里**：')
+    [void]$s3.AppendLine('')
+    [void]$s3.AppendLine('- 安装：Unity 的 AI Game Developer 窗口 → Extensions → Install；或 `unity-mcp-cli install-extension <名称> <Unity工程>`。')
+    [void]$s3.AppendLine('- 装完用 `mcp__unity__unity-tool-list`（可带 `regexSearch` / `includeInputs`）取实时清单，再用 `mcp__unity__tool-set-enabled-state` 按需开启。')
+    [void]$s3.AppendLine('- 扩展工具随扩展版本变，本文件只保证「依据哪个插件版本的 catalog 生成」；换离线包后由 `/unity-mcp-update-tools` 重生成。')
+    [void]$s3.AppendLine('')
+    foreach ($ext in $extensions) {
+        [void]$s3.AppendLine("## $($ext.name) — ``$($ext.packageId)``")
+        if ($ext.description) { [void]$s3.AppendLine(''); [void]$s3.AppendLine($ext.description) }
+        [void]$s3.AppendLine('')
+        foreach ($t in @($ext.tools)) {
+            if ($t.name) { [void]$s3.AppendLine("- ``$($t.name)`` — $($t.description)") }
+        }
+        [void]$s3.AppendLine('')
+    }
+    Set-Content -Path (Join-Path $refDir 'extensions.md') -Value $s3.ToString() -Encoding UTF8
+}
+
 # ---------- 报告各层大小 ----------
 $l1 = (Get-Content (Join-Path $outDir 'SKILL.md') -Raw).Length
 Write-Host "L1 索引 SKILL.md : $l1 chars (~$([math]::Round($l1/4)) tok)"
@@ -379,4 +443,4 @@ Get-ChildItem $refDir -File | Sort-Object Length -Descending | ForEach-Object {
 }
 $l2all = (Get-ChildItem $refDir -File | Measure-Object -Property Length -Sum).Sum
 Write-Host "L2 全部: $l2all chars (~$([math]::Round($l2all/4)) tok) / L1+L2: $($l1+$l2all) chars"
-Write-Host "命令数: $($rows.Count)  分类数: $(($rows | Select-Object -ExpandProperty Category -Unique).Count)"
+Write-Host "命令数: $($rows.Count)  分类数: $(($rows | Select-Object -ExpandProperty Category -Unique).Count)  扩展数: $($extensions.Count)"

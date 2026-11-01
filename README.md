@@ -9,7 +9,7 @@ A DeepSeek Harness (DSH) plugin that bridges a Unity MCP server (`com.ivanmurzak
 - Dormant from boot: no connection, no Unity tools — two hook tools, ~224 tokens.
 - `/unity-mcp-tools` then `unity_mcp_activate` connects and registers `mcp__unity__*`.
 - Enabled commands take effect on the **next** step; `unity_tools_restore` disables them and disconnects.
-- Ships the command catalog for plugin 1.2.0 (18 commands, RQL-first) and the `/unity-mcp-install` / `/unity-mcp-check` skills.
+- Ships the command catalog for plugin 1.6.0 (19 commands, RQL-first; regenerable from the offline package via `/unity-mcp-update-tools`) and the `/unity-mcp-install` / `/unity-mcp-check` / `/unity-mcp-update` / `/unity-mcp-update-tools` skills.
 - `resyncAfterTools`: after a management-tool call the bridge re-fetches `tools/list` itself, because DSH's long-lived session never receives `list_changed`.
 
 ## Install
@@ -35,7 +35,9 @@ Uninstall: `dsh plugin --profile <profile> remove dsh-unity-mcp-bridge`
 | Entry | What it does |
 |---|---|
 | `/unity-mcp-install` | Installs the Unity-side plugin and the MCP Server into the workspace's Unity project |
-| `/unity-mcp-check` | Pins both ends to port 20000, sets the AI agent, initializes the minimal tool set, checks versions |
+| `/unity-mcp-check` | Checks plugin install, port 20000, DSH bundle loading, minimal tool set and catalog version, then runs the connect test |
+| `/unity-mcp-update` | Checks the official CLI, the local `vendor/` offline package and the Unity plugin for updates; upgrades only after you agree |
+| `/unity-mcp-update-tools` | Refreshes the offline package and regenerates the `/unity-mcp-tools` command and extension indexes |
 | `/unity-mcp-tools` | Opens Unity capability: activate → find the command → enable only what the task needs |
 | `unity_tools_restore` | Disables everything except the management tool and returns to dormant |
 
