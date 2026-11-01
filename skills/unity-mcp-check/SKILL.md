@@ -42,17 +42,16 @@ Get-ChildItem (Join-Path $proj 'Library\PackageCache') -Directory -Filter 'com.i
 - 只有 manifest、没有 `PackageCache` → Unity 还没解析包：让 Unity 打开/重新加载项目一次再看。
 - 两处都没有 → **未装**：报告后交给 `/unity-mcp-install`，不要在这里装。
 
-## 2. 端口是不是 20000（不是就改）
+## 2. 端口是不是 20000、模式是不是 Custom（不对就改）
 
-**20000 是唯一标准端口。** 哪一端不是 20000，就把**那一端**改成 20000。
+**20000 是唯一标准端口；并且必须是 `connectionMode: Custom`** —— Cloud 模式不会启动本地服务器，DSH 永远连不上。
 
 ### 2.1 读现状
 
 ```powershell
-# Unity 侧：项目配置里的 host / token（configure --list 也会打印 Host）
-unity-mcp-cli configure $proj --list | Select-String 'Host'
-Get-Content (Join-Path $proj 'UserSettings\AI-Game-Developer-Config.json') -Raw |
-  Select-String '"host"|"token"|"connectionMode"'
+$cfgPath = Join-Path $proj 'UserSettings\AI-Game-Developer-Config.json'
+$cfg = Get-Content $cfgPath -Raw | ConvertFrom-Json
+$cfg.host; $cfg.connectionMode; $cfg.keepServerRunning
 
 # Unity 侧实际监听的端口（编辑器在跑时才有意义，取最后一条）
 Select-String -Path (Join-Path $proj 'Library\mcp-server\win-x64\logs\server-log.txt') `
@@ -66,23 +65,28 @@ Select-String -Path (Join-Path $prof 'cordis.patch.yml') -Pattern 'unity-mcp' -C
 
 `unity-mcp-cli status $proj` 会同时列出 **Config Server**（项目配置里的地址，就是 Unity 插件对外服务的地址）和它自己的 **Local MCP Server** 地址 —— **以 Config Server 为准**，不要被另一个端口带跑。
 
-### 2.2 Unity 侧不是 20000 → 改成 20000
+### 2.2 Unity 侧不是 20000 / 仍是 Cloud → 改配置（重启统一在 4.5）
 
-改写项目自己的配置，不是改 DSH。需要 `unity-mcp-cli`；缺了就按 `/unity-mcp-install` 第 2 步装（`npm install -g unity-mcp-cli`）。
+判定：`host` 不是 `http://localhost:20000` **或** `connectionMode` 不是 `Custom`，就执行下面整段。改写的是项目自己的配置，不是 DSH。需要 `unity-mcp-cli`；缺了就按 `/unity-mcp-install` 第 2 步装（`npm install -g unity-mcp-cli`）。
 
 ```powershell
-# 先看它会改什么，不落盘
-unity-mcp-cli bootstrap-local $proj --url 'http://localhost:20000/' --token '<项目现有 token>' --dry-run
+$cfgPath = Join-Path $proj 'UserSettings\AI-Game-Developer-Config.json'
+$cfg = Get-Content $cfgPath -Raw | ConvertFrom-Json
+$token = $cfg.token
 
-# 备份后落盘
-Copy-Item (Join-Path $proj 'UserSettings\AI-Game-Developer-Config.json') `
-  (Join-Path $proj ("UserSettings\AI-Game-Developer-Config.json.bak-" + (Get-Date -Format yyyyMMdd-HHmmss)))
-unity-mcp-cli bootstrap-local $proj --url 'http://localhost:20000/' --token '<项目现有 token>'
+# 0) 执行前提醒用户保存未保存的场景/改动（close 会优雅退出，30s 不退则强杀）
+# 先看会改什么，不落盘
+unity-mcp-cli bootstrap-local $proj --url 'http://localhost:20000/' --token $token --dry-run
+
+# 备份后落盘（Cloud → Custom，host → 20000）
+Copy-Item $cfgPath "$cfgPath.bak-$(Get-Date -Format yyyyMMdd-HHmmss)"
+unity-mcp-cli bootstrap-local $proj --url 'http://localhost:20000/' --token $token
 ```
 
-- 该命令把配置里的 `host` 改成 `http://localhost:20000`（`connectionMode` 保持 `Custom`，或从 Cloud 切到 Custom），**幂等**，可重复执行。
+- **这里先不重启**：第 4 步还要写工具集配置；所有文件改完后在 **4.5 统一重启一次编辑器**（直接 `close`/`open`，不再给别的选项）。
+- **为什么必须重启编辑器**：`McpServerManager` 是 `[InitializeOnLoad]`，静态构造函数只在**域重载**时读一次 `connectionMode`；Cloud 模式下 `StartServerIfNeeded()` 打印 `Cloud mode active, skipping local server auto-start` 后直接返回，并且该方法第一行就 `EditorApplication.update -= StartServerIfNeeded`（**只跑一次**）。所以只改 JSON 不会启动服务器。
+- `keepServerRunning` 必须是 `true`：false 时 `StartServerIfNeeded()` 同样会跳过（日志 `KeepServerRunning is false, skipping auto-start`）。
 - token 用**项目里已有的那个**，不要凭空生成；`--dry-run` 的 diff 要念给用户看。
-- **必须让 Unity 重新加载项目**（或重启编辑器），服务器才会在新端口上监听 —— 只改文件不算生效。
 - 用户明确要求保留项目原端口时**停下来问**，不要强行统一。
 
 ### 2.3 DSH 侧不是 20000 → 改回 20000
@@ -110,24 +114,46 @@ Select-String -Path (Join-Path $prof 'cordis.patch.yml') -Pattern 'unity-mcp' -C
 
 ## 4. 初始化工具集（参考 `reference/tool.md`）与命令目录版本自检
 
-Unity 侧**只留一个**可见工具 `tool-set-enabled-state`（1.6.0 起正式名 `tool-set-visibility`，旧名仍可用）：它既是唯一的"开关"，也是桥接 `unity_tools_restore` 的保留集，等于最小常驻状态。
+Unity 侧**只留一个**可见工具 `tool-set-enabled-state`（1.6.0 正式名 `tool-set-visibility`，旧名等价）：它既是唯一的"开关"，也是桥接 `unity_tools_restore` 的保留集，等于最小常驻状态。
 
-> **1.6.0 起是「可见性」而不是禁用**：默认只有 7 个核心工具可见，且管理开关本身默认隐藏。隐藏的工具仍可按名调用，但**不会出现在 `tools/list`**（不进入模型上下文，桥接激活后也注册不到），所以这一步必须把开关显式设为 visible，否则模型拿不到任何开关。
+> **1.6.0 起是「可见性」而不是禁用**：默认只有 7 个核心工具可见，且管理开关本身默认隐藏。隐藏的工具仍可按名调用，但**不会出现在 `tools/list`**（不进入模型上下文，桥接激活后也注册不到），所以这一步必须把开关显式设为 visible。
+
+**新工程不能先跑 `--disable-all-tools`**：CLI 1.6.0 的 `updateFeatures` 只修改配置里**已存在**的条目，`tools: []` 时 `--disable-all-tools` / `--enable-all-tools` 都是空操作；随后 `--enable-tools` 只 push 一条，结果仍是「默认 7 + 开关 = 8 个可见」。必须用**显式名单**把条目物化。
+
+先看现状：如果 `--list` 里已经只有开关一条 `[visible]`，且第 2 步判定无需改端口/模式，就不必重写配置，直接去 4.5（20000 已监听则连 4.5 也跳过）：
 
 ```powershell
-# 1.6.0 的 --list 打印 [visible]/[hidden]，旧版 CLI 打印 [enabled]/[disabled]
-unity-mcp-cli configure $proj --list | Select-String '\[(visible|enabled)\]'   # 先看当前状态
-
-# 必须分成两条执行 —— 见下面的顺序陷阱
-unity-mcp-cli configure $proj --disable-all-tools
-unity-mcp-cli configure $proj --enable-tools tool-set-enabled-state
-
-unity-mcp-cli configure $proj --list | Select-String '\[(visible|enabled)\]'   # 复验：恰好 1 条
+unity-mcp-cli configure $proj --list | Select-String '\[(visible|enabled)\]'
 ```
 
-- ⚠️ **顺序陷阱（实测）**：`--disable-all-tools` 与 `--enable-tools` **不能写在同一条命令里** —— disable-all 会覆盖 enable，结果连唯一的开关 `tool-set-enabled-state` 都被隐藏（0 个可见），模型就再也看不到开关了。必须分两条：先 disable-all，再 enable-tools。
-- 万一已经被全部隐藏：单独跑一条 `unity-mcp-cli configure $proj --enable-tools tool-set-enabled-state` 即可救回，不用重装插件。
-- 复验结果应当**只有** `tool-set-enabled-state` 是 `[visible]`（旧版 CLI 显示 `[enabled]`），其余全是 `[hidden]` / `[disabled]`。注册总数随插件版本变：**1.6.0 = 19 个（默认 7 可见）**，1.2.0 = 18 个（默认 7），0.9x = 73。看到 19 不是「工具变多了」。
+```powershell
+$prof = $env:DSH_PROFILE_DIR
+$bridge = Join-Path $prof 'node_modules\dsh-unity-mcp-bridge'
+$refDir = Join-Path $bridge 'skills\unity-mcp-tools\reference'
+$names = Get-ChildItem $refDir -Filter *.md |
+  Where-Object Name -ne 'extensions.md' |
+  ForEach-Object { Select-String -Path $_.FullName -Pattern '^- `([a-z0-9-]+)`' -AllMatches } |
+  ForEach-Object { $_.Matches } | ForEach-Object { $_.Groups[1].Value } |
+  Sort-Object -Unique
+
+# 1) 显式关掉全部基础工具（缺失条目会被 push 进配置）
+unity-mcp-cli configure $proj --disable-tools ($names -join ',')
+# 2) 只显示开关
+unity-mcp-cli configure $proj --enable-tools tool-set-enabled-state
+# 3) 复验：Tools 条目数 = 命令数（1.6.0 为 19），[visible] 恰好 1 条
+unity-mcp-cli configure $proj --list
+```
+
+- 等价脚本（插件目录 `tools\normalize-toolset.ps1`，存在时优先用）：它完成上面三步，并断言「条目数 = 目录命令数、只有开关可见」，失败返回非 0：
+
+  ```powershell
+  powershell -NoProfile -ExecutionPolicy Bypass -File "<bridge>\tools\normalize-toolset.ps1" -ProjectPath $proj
+  ```
+
+- 以上规避的是 **CLI 1.6.0 的已知行为**：`updateFeatures` 只改已有条目，空配置时 `--disable-all-tools` / `--enable-all-tools` 是空操作。上游修了之后这段仍安全（幂等）。
+- 扩展包的工具不在基础目录里：装完扩展后，激活连接再跑一次 `unity_tools_restore`，把剩余可见的扩展工具一并隐藏（开关保留）。
+- 万一被全部隐藏：单独跑 `unity-mcp-cli configure $proj --enable-tools tool-set-enabled-state` 即可救回。
+- 复验结果应当**只有** `tool-set-enabled-state` 是 `[visible]`（旧版 CLI 显示 `[enabled]`），其余全是 `[hidden]` / `[disabled]`。注册总数随插件版本变：**1.6.0 = 19 个（默认 7 可见）**，1.2.0 = 18 个（默认 7），0.9x = 73。
 - 这一步直接读写项目配置，**不需要 Unity 在运行**。
 - prompts / resources 默认全隐藏，保持关闭即可；除非用户明确要求，不要打开。
 - 需要别的命令时，交给 `/unity-mcp-tools` 的按需流程（显示 → 用 → `unity_tools_restore` 收回），不要在这里预先全开：每个可见命令的 schema 都会进入之后每一次模型请求。
@@ -144,6 +170,27 @@ unity-mcp-cli configure $proj --list | Select-String '\[(visible|enabled)\]'   #
   ```
 
   实测代价：目录停在 0.91.0 而项目已是 1.2.0 时，18 个分类文件里有 13 个写的是**已删除**的命令（`gameobject-*`、`assets-*`、`scene-*`、`profiler-*`、`console-*`、`editor-application-*`、`editor-selection-*`、`object-*`、`reflection-method-*`、`type-get-json-schema`），1.2.0 由 `rql-query` / `rql-mutate` / `rql-schema` 承担 —— 照旧目录调用必然 `tool not found`。
+
+### 4.5 重启编辑器让配置生效（直接重启，只一次）
+
+**只要第 2 步改过 host/connectionMode，或第 4 步写过工具集配置**，就在这里统一重启一次编辑器（不要在 2.2 里先重启一遍）：
+
+```powershell
+# 执行前必须让用户保存未保存的场景/改动；30s 内没优雅退出会强杀
+unity-mcp-cli close $proj --timeout 30 --force
+unity-mcp-cli open $proj
+unity-mcp-cli wait-for-ready $proj --timeout 300000
+
+# 复验
+unity-mcp-cli configure $proj --list | Select-String 'Host'
+Select-String -Path (Join-Path $proj 'Library\mcp-server\win-x64\logs\server-log.txt') `
+  -Pattern 'Start listening on port' | Select-Object -Last 1
+```
+
+- 为什么必须重启：`McpServerManager` 是 `[InitializeOnLoad]`，只在域重载时读 `connectionMode` 与工具集配置；Cloud 下 `StartServerIfNeeded()` 打印 `Cloud mode active, skipping local server auto-start` 后返回，且只跑一次。
+- Unity 本来没开时 `close` 无操作，`open` 会直接启动；首次解析包 + 起服务器可能超过 2 分钟，`wait-for-ready` 给 300s。
+- 什么都没改（第 2 步无需改 host/模式、`--list` 本就只有开关一条可见）且 20000 已在监听 → 跳过本节，直接去第 5 步。
+- 如果 `Host` 不是 20000 或日志没有 20000 监听 → 回第 2 步核对配置与模式，不要继续第 5 步。
 
 ## 5. 是否连接到 DSH（实测）
 
@@ -165,7 +212,7 @@ unity-mcp-cli wait-for-ready $proj         # 最长 120s
 | 检查项 | 结果 |
 |---|---|
 | Unity 插件 `com.ivanmurzak.unity.mcp` | 已装（manifest 依赖 = …，PackageCache = …）/ 未装 → 交由 `/unity-mcp-install` |
-| Unity 侧端口 | 本来就是 20000 / 原 24009 → 已改 20000（附备份路径，需重载 Unity）/ 未改（用户要求保留） |
+| Unity 侧端口 | 本来就是 20000 + Custom / 原 24009 或 Cloud → 已改 20000 + Custom，并已重启编辑器（附备份路径） / 未改（用户要求保留） |
 | DSH 侧 url | `http://localhost:20000/mcp`（一致 / 已改 / 无覆盖行） |
 | 插件加载 | bundle 已插入 `unity-mcp` 行（0.5.0）/ bundle 为空 → 已补覆盖行 / `dsh.profile.bundles` 缺该包 |
 | 命令目录（`/unity-mcp-tools`） | 按 1.6.0 生成，与项目一致 / 按 0.91.0 生成 → 已重生成（需重启 `dsh web`） |
@@ -177,12 +224,14 @@ unity-mcp-cli wait-for-ready $proj         # 最长 120s
 
 | 现象 | 原因 | 处理 |
 |---|---|---|
-| 20000 没人听 | Unity 没开、改了配置但没重载、或服务器没启动 | 重载项目 / 在 Window → AI Game Developer 里启动服务器 |
-| 改了 host 但端口没变 | Unity 没重新加载项目 | 重启编辑器；`status` 再看 Config Server |
+| 20000 没人听 | Unity 没开、服务器没启动、或仍是 Cloud 模式 | 先看 `connectionMode`；Cloud 就 `bootstrap-local` 后**重启编辑器**（`close --force` → `open`） |
+| 日志有 `Cloud mode active, skipping local server auto-start` | 改完配置没触发域重载；`StartServerIfNeeded` 只跑一次 | `bootstrap-local` 后重启编辑器（`unity-mcp-cli close $proj --timeout 30 --force` → `open $proj` → `wait-for-ready`） |
+| 改了 host / 模式但服务器没起 | 插件静态构造只在域重载时读 `connectionMode`，只改 JSON 不生效 | 同上，重启编辑器后再看 `Start listening on port 20000` |
+| 全新工程的可见工具是 8 个（默认 7 + 开关） | `tools: []` 时 `--disable-all-tools` 是空操作（CLI 1.6.0 只改已有条目） | 按第 4 步用 `--disable-tools <显式名单>` 物化条目，再 `--enable-tools tool-set-enabled-state` |
 | manifest 里有包但连不上 | Unity 还没解析包 | 用 Unity 打开项目一次 |
 | 404 / 405 | 端点路径不对（`/mcp` ↔ `/p/<token>`） | 以 `http://localhost:20000/mcp` 为准；需要 token 路径时再补 |
 | 401 / 403 | token 缺失或过期 | 用项目配置里的 token；或 `bootstrap-local --url ... --token ...` 重新固定 |
-| 工具全被隐藏（含 `tool-set-enabled-state`） | 把 `--disable-all-tools` 与 `--enable-tools` 写进了同一条命令（上面的顺序陷阱） | 单独跑一条 `unity-mcp-cli configure $proj --enable-tools tool-set-enabled-state` 救回 |
+| 工具全被隐藏（含 `tool-set-enabled-state`） | 被 `--disable-all-tools` 或历史上写死的配置隐藏 | 单独跑一条 `unity-mcp-cli configure $proj --enable-tools tool-set-enabled-state` 救回 |
 | `mcp__unity__gameobject-find` 之类报 `tool not found` | 命令目录是按旧插件版本生成的（1.2.0 已移除 `gameobject-*` / `assets-*` / `scene-*` / `profiler-*` 等） | 按第 4 步做目录版本自检并重生成 + 重启 `dsh web`；读写 Unity 内容改走 `rql-query` / `rql-mutate` / `rql-schema` |
 | 工具名冲突 / 行为异常 | stock `dsh-mcp-client` 与桥接插件同时跑同一 `serverName` | 只留一个 |
 | 插件页显示「已安装，未生效」 | bundle 没有插入插件行（0.4.0 及以前 bundle patch 是 `[]`），或 profile 的 `dsh.profile.bundles` 里没有这个包 | 升级到 ≥0.5.0（行随 bundle 提供）；确认 `dsh.profile.bundles` 含 `dsh-unity-mcp-bridge`；重启 |

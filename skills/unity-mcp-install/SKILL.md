@@ -202,12 +202,26 @@ Push-Location $proj; & "$env:USERPROFILE\.ai-game-dev\server\win-x64\gamedev-mcp
 
 > ⚠️ 别对 Server 二进制跑裸 `--help`：`gamedev-mcp-server.exe --help` **不是打印帮助，而是直接启动 server**（默认 8080，会一直占着）。只有 `configure --help` 这类子命令帮助是安全的；误启动就按端口找到 PID 杀掉。
 
-然后告诉用户三条：
+然后告诉用户：
 
 1. 用 Unity 打开该项目（`unity-mcp-cli open $proj`）—— 包在编辑器里解析，`Library/PackageCache/` 才会出现。
 2. 在 Unity 里打开 **Window → AI Game Developer**，确认连接方式（自建本地端点选 Custom，或走 Cloud），并把顶部的 **AI agent** 选成要用的那个（如 **Kilo Code**）—— Skills 的自动生成只认这个下拉框，CLI 的 `setup-skills` 不支持 `kilo-code`。
-3. 回到 DSH 跑 `/unity-mcp-check`：它会检查插件是否装上、端口是否 **20000**、DSH 是否加载了插件行、工具集是否只剩 `tool-set-enabled-state`、命令目录是否与插件版本一致，最后实测连通。要查版本或升级用 `/unity-mcp-update`（检查后先问用户，同意才更新）。
-4. **本次装了或升级了插件版本 → 必须重生成桥接自带的命令目录**，否则 `/unity-mcp-tools` 会教模型去开不存在的命令（顺带刷新 `reference/extensions.md` 的可选扩展清单；也可以直接跑 `/unity-mcp-update-tools`）。命令名随插件版本变（实测 0.9x = 73 个；1.2.0 = 18 个；**分水岭是 1.0.0「RQL replaces the data tools」**，`assets-*` / `gameobject-*` / `scene-*` / `profiler-*` 等已被 `rql-query` / `rql-mutate` / `rql-schema` 取代）：
+3. **若客户端是 DSH（本地 20000）：新工程默认是 Cloud，而 Cloud 模式不会启动本地服务器。** 先让用户保存工程，再改配置并**直接重启编辑器**：
+
+   ```powershell
+   $cfgPath = Join-Path $proj 'UserSettings\AI-Game-Developer-Config.json'
+   $token = (Get-Content $cfgPath -Raw | ConvertFrom-Json).token
+   Copy-Item $cfgPath "$cfgPath.bak-$(Get-Date -Format yyyyMMdd-HHmmss)"
+   unity-mcp-cli bootstrap-local $proj --url 'http://localhost:20000/' --token $token
+   unity-mcp-cli close $proj --timeout 30 --force
+   unity-mcp-cli open $proj
+   unity-mcp-cli wait-for-ready $proj --timeout 300000
+   ```
+
+   - 插件 `McpServerManager` 是 `[InitializeOnLoad]`，**只在域重载时读一次 `connectionMode`**；Cloud 下 `StartServerIfNeeded()` 打印 `Cloud mode active, skipping local server auto-start` 后直接返回，而且该方法只跑一次 —— 只改 JSON 不会启动服务器，必须重启编辑器。
+   - 确认配置里 `keepServerRunning: true`；false 时自动启动同样会跳过。
+4. 回到 DSH 跑 `/unity-mcp-check`：它会检查插件是否装上、端口是否 **20000** 且模式是 Custom、DSH 是否加载了插件行、工具集是否只剩 `tool-set-enabled-state`、命令目录是否与插件版本一致，最后实测连通。要查版本或升级用 `/unity-mcp-update`（检查后先问用户，同意才更新）。
+5. **本次装了或升级了插件版本 → 必须重生成桥接自带的命令目录**，否则 `/unity-mcp-tools` 会教模型去开不存在的命令（顺带刷新 `reference/extensions.md` 的可选扩展清单；也可以直接跑 `/unity-mcp-update-tools`）。命令名随插件版本变（实测 0.9x = 73 个；1.2.0 = 18 个；**分水岭是 1.0.0「RQL replaces the data tools」**，`assets-*` / `gameobject-*` / `scene-*` / `profiler-*` 等已被 `rql-query` / `rql-mutate` / `rql-schema` 取代）：
 
    ```powershell
    # 桥接目录是按哪个版本生成的（SKILL.md 标题行）
