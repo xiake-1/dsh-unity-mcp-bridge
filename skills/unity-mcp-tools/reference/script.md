@@ -5,8 +5,8 @@
 - `script-delete` [off] — Delete the script file(s).
   - 参数: files, requestId?
   - 源码: `Editor/Scripts/API/Tool/Script.Delete.cs`
-- `script-execute` [on] — Compiles and executes C# code dynamically using Roslyn.
-  - 参数: csharpCode, className?, methodName?, parameters?, isMethodBody?
+- `script-execute` [on] — Compiles and runs C# in the Unity Editor: plain statements with the last expression as the result (own usings, local classes, await allow...
+  - 参数: csharpCode, className?, methodName?, parameters?, isMethodBody?, usings?, include?
   - 源码: `Editor/Scripts/API/Tool/Script.Execute.cs`
 - `script-read` [off] — Reads the content of a script file and returns it as a string.
   - 参数: filePath, lineFrom?, lineTo?

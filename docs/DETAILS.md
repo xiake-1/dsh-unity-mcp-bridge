@@ -53,9 +53,11 @@ dsh plugin --profile <profile> add file:<path-to-this-checkout>
 | `keepEnabledTools` | `[]` | 恢复时额外保留的原始工具名（除 `tool-set-enabled-state` 之外）。 |
 | `registerCatalogSkill` | `true` | 是否注册随包的命令目录技能。 |
 | `skillName` | `unity-mcp-tools` | 技能名 / 斜杠命令。 |
-| `registerHelperSkills` | `true` | 是否注册两个辅助技能。 |
+| `registerHelperSkills` | `true` | 是否注册四个辅助技能。 |
 | `installSkillName` | `unity-mcp-install` | 安装 Unity 侧插件的技能名。 |
-| `checkSkillName` | `unity-mcp-check` | 检查连通性的技能名。 |
+| `checkSkillName` | `unity-mcp-check` | 检查「插件已装 / 端口 20000 / DSH bundle 加载 / 工具集 / 命令目录 / 能连上 DSH」的技能名。 |
+| `updateSkillName` | `unity-mcp-update` | 检查并（经用户同意后）更新官方 CLI、本地 `vendor/` 离线包与 Unity 插件的技能名。 |
+| `updateToolsSkillName` | `unity-mcp-update-tools` | 刷新本地离线包并重生成命令目录与扩展索引的技能名。 |
 | `helperSkillsModelInvocable` | `true` | 辅助技能与目录不同，会提供给模型。 |
 | `helperSkillsUserInvocable` | `true` | 同时也是用户斜杠命令。 |
 
@@ -79,9 +81,11 @@ boot ──► DORMANT ──(/unity-mcp-tools ─► unity_mcp_activate)──�
 | 技能 | 内容 |
 |---|---|
 | `/unity-mcp-install` | 检查 `unity-mcp-cli` 是否在本机（缺则 `npm install -g unity-mcp-cli`），并核对 **CLI / Unity 插件 / MCP Server 三者 lockstep**（老 CLI 的 AI agent 列表会缺项，例如没有 `kilo-code`）。在工作区内按 `ProjectSettings/ProjectVersion.txt` 定位 Unity 工程；`Packages/manifest.json` 里已有 `com.ivanmurzak.unity.mcp` 就报告，否则 `unity-mcp-cli install-plugin <project> --with-server`（同时把 `GameDev-MCP-Server` 二进制放进 CLI 托管目录 `~/.ai-game-dev/server/<rid>/`），再重读 manifest 验证。GitHub 下载失败时走本机系统代理（Clash）：端口从注册表读而不是猜，`NODE_USE_ENV_PROXY=1` 必需（Node 24 的全局 `fetch` 否则忽略 `HTTP_PROXY`），`NO_PROXY` 必须让 OpenUPM/npm 直连。最后手段：带断点续传的代理下载 + 对 release `SHA256SUMS` 校验 + `--server-source` 安装。仓库带 `vendor/` 离线包时优先离线：`tools/offline-package.mjs install` 写 Unity 官方支持的 `file:` 本地 tarball 依赖（自动备份 manifest），Server 来自缓存 zip，全新工程不联网即可装好。 |
-| `/unity-mcp-check` | 把两端统一到 **20000**：Unity 侧 `unity-mcp-cli bootstrap-local --url http://localhost:20000/`（改项目自己的 `UserSettings/AI-Game-Developer-Config.json`，先带时间戳备份 + `--dry-run` 比对）；DSH 侧 `unity-mcp` 行漂移就纠正回 `http://localhost:20000/mcp`；仍钉旧端口的其他客户端只报告、不静默改。**再把 AI agent 配成 Kilo Code**：`unity-mcp-cli configure <project> --agent kilo-code --url http://localhost:20000` 写 `.kilocode/mcp.json`（`url` 为 `http://localhost:20000/p/<pin>`）；`setup-mcp` 的列表没有 `kilo-code`，所以走 `configure --agent`，托管二进制缺失时回退到项目自己的 `Library/mcp-server/<rid>/gamedev-mcp-server.exe`。然后把 Unity 工具集初始化成只留 `tool-set-enabled-state`：两次 `configure` 调用——先 `--disable-all-tools`，再 `--enable-tools tool-set-enabled-state`，**不能合并成一条**（disable-all 优先，会把唯一能撤销它的管理工具也关掉）。最后探测端口与 HTTP 端点，并用 `unity_mcp_activate` 实测。之前还会跑 `tools/offline-package.mjs check`，比对**上游最新 / `vendor/` 缓存 / 项目已装**（外加 CLI）并给出优先走代理的更新路径——只报告，不自行升级。 |
+| `/unity-mcp-check` | 链路体检：**① Unity 工程里是否装了插件**（`Packages/manifest.json` 依赖 + `Library/PackageCache/com.ivanmurzak.unity.mcp@*`）；**② 端口是否为 20000**（Unity 侧读项目 `UserSettings/AI-Game-Developer-Config.json` 的 `host`，不是 20000 就 `bootstrap-local --url http://localhost:20000/` 改过来，先备份再改，改完必须让 Unity 重载；DSH 侧只看 profile 有没有把 url 覆盖成别的端口）；**③ DSH 依赖与 bundle**（`package.json` 依赖 + `dsh.profile.bundles` + bundle patch 里的 `unity-mcp` 行，确认没有第二份同 `serverName` 的 stock `dsh-mcp-client`）；**④ 工具集**（`configure --list` 确认只剩 `tool-set-enabled-state`；初始化必须分两条：先 `--disable-all-tools` 再 `--enable-tools tool-set-enabled-state`，合并会把唯一的开关一起关掉）；**⑤ 命令目录版本自检**（`skills/unity-mcp-tools/SKILL.md` 标题行版本 vs 项目 `PackageCache` 里的包版本，不一致就重生成 + 重启 `dsh web`）；**⑥ 连通性**（`unity_mcp_activate` 实测，`ECONNREFUSED` = 没人听、404/405 = 端点不对、401/403 = token 不对）。不做版本检查与升级（→ `/unity-mcp-update`），也不配 AI agent。 |
+| `/unity-mcp-update` | 检查并更新三样东西：**官方 CLI**（npm `unity-mcp-cli`）、**本地离线包**（插件自带 `vendor/`：插件 tarball + `GameDev-MCP-Server` zip + `SHA256SUMS` + `manifest.json`）、**Unity 内插件**（`com.ivanmurzak.unity.mcp`，Server 跟随插件钉住的版本）。`tools/offline-package.mjs check --project <proj> --cli-version (unity-mcp-cli --version)` 一次比「上游最新 / `vendor/` / 项目已装 / 本机 CLI」四层，只读不改。**有更新先问用户**（列出目标版本、会动哪些文件、需要重启什么），用户明确同意才更新：CLI `npm install -g unity-mcp-cli` → 离线包 `fetch --plugin-version <latest>`（只动 `vendor/`，可单独执行，不动工程、不用重启）→ 工程 `install --project`（自动备份 manifest）+ Server 按插件钉住的版本 `install-plugin --with-server --server-source <vendor zip>` → 重生成命令目录并重启 `dsh web`。用户不同意就只给报告与可复制命令。 |
+| `/unity-mcp-update-tools` | 只刷新「知识层」：把 `vendor/` 离线包升到上游最新（`offline-package.mjs fetch`，SHA256 校验 + 断点续传，Server 按新插件钉住的版本），再**依据新离线包**重生成 `skills/unity-mcp-tools/SKILL.md`、`reference/*.md` 与 `reference/extensions.md`。生成器直接读 tarball 解出的包目录（`-PackageRoot`，版本取自包内 `package.json`），不需要 Unity 工程。`extensions.md` 列出插件包 `extensions.catalog.json` 里的 10 个可选扩展及各自会带的命令（扩展命令本身仍不进索引，装完用 `unity-tool-list` 取实时清单）。只改 `<bridge>`，不碰工程内插件；最后提示重启 `dsh web`。 |
 
-两者都遵循官方安装流程 <https://ai-game.dev/engines/unity>。设 `registerHelperSkills: false` 可不发布它们。
+四者都遵循官方安装流程 <https://ai-game.dev/engines/unity>。设 `registerHelperSkills: false` 可不发布它们。
 
 ---
 
@@ -91,8 +95,10 @@ boot ──► DORMANT ──(/unity-mcp-tools ─► unity_mcp_activate)──�
 
 `vendor/` 缓存可安装产物，让新 Unity 工程不碰 GitHub 也能装（明细见 [vendor/README.md](../vendor/README.md)）：插件 tarball `com.ivanmurzak.unity.mcp-1.5.0.tgz`（833,033 B）与 `gamedev-mcp-server-win-x64-9.2.17.zip`（45,558,728 B，对 release `SHA256SUMS` 校验）。**lockstep 是读出来的，不是猜的**：`tools/offline-package.mjs` 从 tarball 里取 `McpServerManager.ServerVersion`（插件 `1.5.0` 钉 Server `9.2.17`），CLI 与插件同号。
 
+日常的「有没有新版本 / 要不要升级」走 `/unity-mcp-update`：先只读跑下面的 `check`（四层：上游最新 / `vendor/` / 项目已装 / 本机 CLI），有更新先问用户，同意后才 `fetch` 刷新本地离线包、再 `install` 进工程。
+
 ```powershell
-# 三层比对：上游最新 / vendor 缓存 / 项目已装
+# 四层比对：上游最新 / vendor 缓存 / 项目已装 / 本机 CLI
 node "<plugin>\tools\offline-package.mjs" check --project <unity-project> --cli-version (unity-mcp-cli --version)
 
 # 刷新：优先代理（GitHub release 资产是最不稳的一条），断点续传 + SHA256 校验
@@ -111,13 +117,18 @@ unity-mcp-cli install-plugin <unity-project> --with-server --server-version 9.2.
 
 ## 重新生成命令目录 / Regenerating the catalog
 
-`tools/generate-unity-mcp-catalog.ps1` 扫描已安装的 `com.ivanmurzak.unity.mcp@*` 包，重写 `skills/SKILL.md` 与 `skills/reference/*.md`（分类取自插件自己的 `[AiTool(Title = ...)]` 属性）。升级 Unity 插件后重跑，再重启 `dsh web`。
+`tools/generate-unity-mcp-catalog.ps1` 扫描插件包源码，重写 `skills/unity-mcp-tools/SKILL.md`、`skills/unity-mcp-tools/reference/<分类>.md` 与 `reference/extensions.md`（分类取自插件自己的 `[AiTool(Title = ...)]` 属性；扩展清单取自包内 `extensions.catalog.json`）。升级插件后重跑，再重启 `dsh web`。
 
 ```powershell
+# 从 Unity 工程里已解析的包生成
 powershell -NoProfile -ExecutionPolicy Bypass -File tools/generate-unity-mcp-catalog.ps1 -ProjectRoot <your-unity-project>
+
+# 或直接从 vendor 离线包生成（不需要 Unity 工程；版本取自包内 package.json）
+tar -xzf vendor/com.ivanmurzak.unity.mcp-<ver>.tgz -C <临时目录>
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/generate-unity-mcp-catalog.ps1 -PackageRoot <临时目录>/package
 ```
 
-插件 1.2.0 不再把工具描述写成字符串字面量，而是常量引用（如 `[Description(RqlGuide.QueryDescription)]`），`RqlGuide` 还会把字面量与其他常量拼接。生成器会求值这些常量，RQL 语言手册因此能落到 `reference/rql.md`：`-BodyTools`（默认 `rql-*`）决定哪些命令带上插件自己的 `[AiToolBody]`/`[AiSkillBody]` 正文，于是机械类命令保持一行，语言类工具带完整指南。脚本必须存为 **带 BOM 的 UTF-8**——Windows PowerShell 5.1 会把无 BOM 的 UTF-8 当 ANSI，中文会变成解析错误。
+插件 1.2.0 不再把工具描述写成字符串字面量，而是常量引用（如 `[Description(RqlGuide.QueryDescription)]`），`RqlGuide` 还会把字面量与其他常量拼接。生成器会求值这些常量，RQL 语言手册因此能落到 `reference/rql.md`：`-BodyTools`（默认 `rql-*`）决定哪些命令带上插件自己的 `[AiToolBody]`/`[AiSkillBody]` 正文，于是机械类命令保持一行，语言类工具带完整指南。脚本必须存为 **带 BOM 的 UTF-8**——Windows PowerShell 5.1 会把无 BOM 的 UTF-8 当 ANSI，中文会变成解析错误。扩展是独立 UPM 包，生成器只扫基础包，所以扩展命令不进索引，`extensions.md` 只回答「可选哪些扩展 + 各带哪些命令」。
 
 ---
 

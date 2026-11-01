@@ -1,6 +1,6 @@
 # vendor/ — AI Game Developer 离线包缓存
 
-插件自带的离线包目录。目的：**GitHub 不通 / 网络慢时也能给新的 Unity 工程装上 MCP 插件**，并且让 `/unity-mcp-check` 能做「上游 vs 本地」的更新检查。
+插件自带的离线包目录。目的：**GitHub 不通 / 网络慢时也能给新的 Unity 工程装上 MCP 插件**，并且让 `/unity-mcp-update` 能做「上游 vs 本地」的更新检查。
 
 ## 当前内容
 
@@ -16,7 +16,7 @@
 ## 刷新（更新检查 → 下载新版本）
 
 ```powershell
-# 只查：上游最新 / 本地 vendor / 项目已装 三层比对
+# 只查：上游最新 / vendor 缓存 / 项目已装 / 本机 CLI 四层比对
 node "<插件目录>\tools\offline-package.mjs" check --project <Unity工程> --cli-version (unity-mcp-cli --version)
 
 # 下载：优先代理（GitHub 资产直连常被掐断），失败自动回落直连；断点续传 + SHA256 校验
@@ -25,6 +25,8 @@ node "<插件目录>\tools\offline-package.mjs" fetch
 ```
 
 哈希不匹配 → 脚本直接失败并让你删掉重下，不会留下「装上了但内容不对」的包。
+
+日常刷新这个目录走 `/unity-mcp-update`：先只读比对「上游最新 / 本地 vendor / 项目已装 / 本机 CLI」，有更新先问用户，同意后才跑上面的 `fetch`（只动 `vendor/`，不碰 Unity 工程）。刷完之后要同步 `/unity-mcp-tools` 的命令索引与扩展索引，跑 `/unity-mcp-update-tools`。
 
 ## 离线装进 Unity 工程
 

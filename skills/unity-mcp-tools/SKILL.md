@@ -1,12 +1,12 @@
 ﻿---
 name: unity-mcp-tools
-description: Unity-MCP 命令索引（分类 + 命令名），含「激活 → 按需开启 → 用完恢复休眠」工作流。需要某命令的用途或参数时，读 reference/<分类>.md。
+description: Unity-MCP 命令索引（分类 + 命令名），含「激活 → 按需开启 → 用完恢复休眠」工作流。需要某命令的用途或参数时，读 reference/<分类>.md；可选扩展清单见 reference/extensions.md。
 whenToUse: 由用户以 /unity-mcp-tools 调用：Unity 能力默认完全关闭，调用本技能后先激活，再按索引定位并开启所需命令，任务结束必须恢复休眠。
 ---
 
 # Unity-MCP 命令索引
 
-包 `com.ivanmurzak.unity.mcp@1.2.0` ｜ 命令 18 个（默认启用 7）｜ 生成 2026-10-19
+包 `com.ivanmurzak.unity.mcp@1.5.0` ｜ 命令 18 个（默认启用 7）｜ 生成 2026-11-01
 
 调用名 `mcp__unity__<命令名>`。**本文件只是知识，不产生能力**：Unity 侧未启用的命令无法调用（服务未运行则全部无法调用）。
 
@@ -30,7 +30,7 @@ whenToUse: 由用户以 /unity-mcp-tools 调用：Unity 能力默认完全关闭
 
 - 本索引由插件源码生成，**命令名随包版本变**；标题行的包版本就是本索引的依据。换版本后重新生成，不要沿用旧索引。
 - **1.2.0 起**：`gameobject-*`、`assets-*`、`scene-*`、`profiler-*`、`console-*`、`editor-application-*`、`editor-selection-*`、`object-*`、`reflection-method-*`、`type-get-json-schema` 已从插件中移除，改由 `rql-query` / `rql-mutate` / `rql-schema` 承担（见 `reference/rql.md`）。按旧名字调用必然失败。
-- 扩展包（Animation / Cinemachine / InputSystem / Navigation / ParticleSystem / ProBuilder / Splines / Terrain / Tilemap / Timeline）会新增命令，本索引不含它们 —— 用 `unity-tool-list` 取实时清单。
+- 扩展包（10 个：Animation / Cinemachine / InputSystem / Navigation / ParticleSystem / ProBuilder / Splines / Terrain / Tilemap / Timeline）都是独立 UPM 包，装到工程后才新增命令；**本索引不含扩展命令** —— 可选哪些扩展、各带哪些命令见 `reference/extensions.md`，装完用 `unity-tool-list` 取实时清单。
 - 插件的 `toolFormat`（`Rql` | `Json`，1.2.0 默认 `Rql`）决定工具参数与结果的数据表示；写参数前看 `reference/<分类>.md` 的参数说明。
 
 ## Package Manager (4) → `reference/package-manager.md`
@@ -50,5 +50,8 @@ tests-run
 
 ## Tool (2) → `reference/tool.md`
 tool-set-enabled-state, unity-tool-list
+
+## Extensions (10) → `reference/extensions.md`
+Animation, Cinemachine, InputSystem, Navigation, ParticleSystem, ProBuilder, Splines, Terrain, Tilemap, Timeline
 
 
